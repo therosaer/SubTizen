@@ -127,6 +127,25 @@
         this.request('getArtist', { id: id }, onSuccess, onError);
     };
 
+    /*
+     * getPlaylists returns every playlist on the server, each with its name,
+     * song count, and a coverArt id when the server has one. The list is not
+     * paged: Subsonic has no offset parameter for it, so the whole set arrives
+     * in one response.
+     */
+    Subsonic.prototype.getPlaylists = function (onSuccess, onError) {
+        this.request('getPlaylists', {}, onSuccess, onError);
+    };
+
+    /*
+     * getPlaylist returns the playlist's entries. Servers disagree on the
+     * shape: most return `playlist.entry[]`, but some older ones return a bare
+     * `playlist` array. The caller normalises both.
+     */
+    Subsonic.prototype.getPlaylist = function (id, onSuccess, onError) {
+        this.request('getPlaylist', { id: id }, onSuccess, onError);
+    };
+
     Subsonic.prototype.search3 = function (query, onSuccess, onError) {
         this.request('search3', {
             query: query,

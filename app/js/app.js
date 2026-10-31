@@ -10,6 +10,7 @@
     'use strict';
 
     var STORAGE_KEY = 'subtizen.connection';
+    var HISTORY_KEY = 'subtizen.history';
     /*
      * Cards render at 300 CSS px. Requesting 132 px (the old vertical-list
      * size) made the artwork visibly pixelated once the layout grew, so ask
@@ -46,6 +47,14 @@
             loading: false,
             seq: 0
         },
+        playlists: {
+            items: [],
+            loaded: false,
+            loading: false,
+            seq: 0
+        },
+        /* Entries of the playlist currently open on the playlist screen. */
+        playlistSongs: [],
         /* Albums of the artist currently open on the artist detail screen. */
         artistAlbums: [],
         /*
@@ -172,7 +181,7 @@
      */
     var SECTIONS = {
         recent: { list: 'recent-list', items: [], kind: 'album', offset: 0,
-                  exhausted: false, loading: false },
+                  exhausted: false, loading: false, local: true },
         added: { list: 'added-list', items: [], kind: 'album', offset: 0,
                  exhausted: false, loading: false },
         top: { list: 'top-list', items: [], kind: 'song', offset: 0,
@@ -190,6 +199,138 @@
      * capped because the response is parsed on a TV with limited memory.
      */
     var SONG_POOL_SIZE = 500;
+
+    /*
+     * How many albums the local listening history keeps. The row pages
+     * through this list client-side, so it is the effective row length.
+     */
+    var HISTORY_LIMIT = 60;
+
+    /*
+     * Recently Played is the app's own listening history, not the server's.
+     * `getAlbumList2?type=recent` is ordered by the server's `played` column,
+     * which only moves when something scrobbles a play — and this app never
+     * did, so the row stayed empty (or stale) no matter what was played on the
+     * TV. The history is recorded here instead, in localStorage, so it
+     * survives restarts and does not depend on the server's scrobble support.
+     *
+     * Entries are albums, most recent first, shaped like the albumList2 items
+     * the row already renders: { id, name, artist, coverArt, played }.
+     */
+    function loadHistory() {
+        var raw, list;
+        try {
+            raw = global.localStorage.getItem(HISTORY_KEY);
+            list = raw ? JSON.parse(raw) : [];
+        } catch (e) {
+            return [];
+        }
+        return Object.prototype.toString.call(list) === '[object Array]' ? list : [];
+    }
+
+    function saveHistory(list) {
+        try {
+            global.localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+        } catch (e) {
+            /* localStorage may be unavailable; non-fatal */
+        }
+    }
+
+    /*
+     * Record a play. The album is moved to the front rather than appended, so
+     * replaying an album does not fill the row with duplicates.
+     *
+     * The key is the album id. `getAlbum` songs carry `parent` (the album) but
+     * no `albumId`; `search3` songs carry `albumId` but no `parent`. Both are
+     * the same album, so either is accepted and the entry is stored under the
+     * album id the row can open.
+     */
+    function recordPlay(song) {
+        var albumId = song && (song.albumId || song.parent);
+        var list, entry, i;
+
+        if (!albumId) {
+            return;
+        }
+        list = loadHistory();
+        for (i = 0; i < list.length; i++) {
+            if (list[i].id === albumId) {
+                entry = list[i];
+                list.splice(i, 1);
+                break;
+            }
+        }
+        if (!entry) {
+            entry = {
+                id: albumId,
+                name: song.album || '',
+                artist: song.artist || '',
+                coverArt: song.coverArt || ''
+            };
+        }
+        entry.played = new Date().getTime();
+        list.unshift(entry);
+        if (list.length > HISTORY_LIMIT) {
+            list.length = HISTORY_LIMIT;
+        }
+        saveHistory(list);
+        refreshRecent();
+    }
+
+    /*
+     * Rebuild the Recently Played row from the history. The row is paged
+     * client-side, so a new play only has to re-render the first page; the
+     * rest is picked up as the user scrolls right.
+     */
+    function refreshRecent() {
+        var section = SECTIONS.recent;
+        var history = loadHistory();
+        var i, item, changed = false;
+
+        if (history.length !== section.items.length) {
+            changed = true;
+        } else {
+            for (i = 0; i < history.length; i++) {
+                if (history[i].id !== section.items[i].id) {
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        if (!changed) {
+            return;
+        }
+
+        section.items = history;
+        section.offset = Math.min(section.offset, history.length);
+        section.exhausted = section.offset >= history.length;
+        section.loading = false;
+
+        /* Re-rendering drops focus, so put it back on the same album. */
+        item = document.activeElement;
+        if (item && item.getAttribute && item.getAttribute('data-list') === 'recent') {
+            item = item.getAttribute('data-id');
+        } else {
+            item = null;
+        }
+        renderSection('recent', 0);
+        if (item) {
+            restoreRecentFocus(item);
+        }
+    }
+
+    function restoreRecentFocus(albumId) {
+        var cards = document.querySelectorAll(
+            '.screen.active .card[data-list="recent"]'
+        );
+        var i;
+        for (i = 0; i < cards.length; i++) {
+            if (cards[i].getAttribute('data-id') === albumId) {
+                focusNode(cards[i]);
+                return;
+            }
+        }
+    }
 
     function loadHome() {
         var pending = SECTION_ORDER.length;
@@ -248,6 +389,16 @@
             }
         }
 
+        /*
+         * Recently Played is the local history, so paging it means slicing
+         * the stored list rather than asking the server for another page.
+         */
+        if (section.local) {
+            receive(loadHistory().slice(section.offset,
+                section.offset + PAGE_SIZE));
+            return;
+        }
+
         if (key === 'top') {
             /*
              * The pool is fetched in one shot and ranked, so paging it means
@@ -270,7 +421,7 @@
             return;
         }
 
-        state.client.getAlbumList(key === 'recent' ? 'recent' : 'newest',
+        state.client.getAlbumList('newest',
             PAGE_SIZE, section.offset, function (response) {
                 receive((response.albumList2 && response.albumList2.album) || []);
             }, fail);
@@ -309,6 +460,14 @@
 
         if (typeof from !== 'number') {
             from = 0;
+        }
+        /*
+         * A rebuild (from 0) replaces the row; a page append keeps it. The
+         * distinction matters because `insertAdjacentHTML` below only ever
+         * adds, so a rebuild that did not clear first would duplicate every
+         * card already on screen.
+         */
+        if (from === 0) {
             listEl.innerHTML = '';
         }
 
@@ -379,13 +538,20 @@
      * the matching track is selected within it.
      */
     function openSong(song) {
-        if (!song || !song.parent) {
+        /*
+         * `getAlbum` songs carry `parent` (the album id); `search3` songs —
+         * which is what Top Picks is built from — carry `albumId` instead.
+         * Accepting only `parent` made every Top Picks play fail with "no
+         * album to open", so those plays never reached the history.
+         */
+        var albumId = song && (song.parent || song.albumId);
+        if (!albumId) {
             setStatus('This song has no album to open.', true);
             return;
         }
         setStatus('Loading ' + song.title + ' ...', false);
 
-        state.client.getAlbum(song.parent, function (response) {
+        state.client.getAlbum(albumId, function (response) {
             var songs = (response.album && response.album.song) || [];
             var i;
             state.songs = songs;
@@ -401,6 +567,12 @@
                     return;
                 }
             }
+            /*
+             * The track is not in the album listing (the pool and the album
+             * can disagree). Play it from the pool's own copy so the history
+             * still gets the album id, which only the pool song carries.
+             */
+            state.songs = [song];
             playIndex(0);
         }, function (err) {
             setStatus('Could not load album: ' + err.message, true);
@@ -681,6 +853,182 @@
         var artist = state.artists.items[index];
         if (artist) {
             openArtist(artist);
+        }
+    }
+
+    /* ---------- Playlists ---------- */
+
+    /*
+     * Playlists come straight from the server via getPlaylists, so they are
+     * whatever the user has on Navidrome/Airsonic/Subsonic — the app keeps no
+     * local copy and no local edits. The list is not paged: Subsonic has no
+     * offset for it, so the whole set arrives at once and is rendered as a
+     * vertical list, the same shape as the artist list.
+     */
+    function loadPlaylists() {
+        var seq;
+
+        if (!state.client) {
+            return;
+        }
+        if (state.playlists.loaded || state.playlists.loading) {
+            renderPlaylists();
+            if ($('screen-playlists').className.indexOf('active') >= 0) {
+                focusFirst();
+            }
+            return;
+        }
+        state.playlists.loading = true;
+        seq = ++state.playlists.seq;
+        setStatus('Loading playlists ...', false);
+
+        state.client.getPlaylists(function (response) {
+            var items = (response.playlists && response.playlists.playlist) || [];
+
+            if (seq !== state.playlists.seq) {
+                return;
+            }
+            state.playlists.items = items;
+            state.playlists.loaded = true;
+            state.playlists.loading = false;
+            renderPlaylists();
+            /*
+             * `show()` ran before the rows existed, so its focusFirst() had
+             * nothing to land on. Put the D-pad on the first playlist now.
+             */
+            if ($('screen-playlists').className.indexOf('active') >= 0) {
+                focusFirst();
+            }
+            setStatus(items.length + ' playlist(s).', false);
+        }, function (err) {
+            if (seq !== state.playlists.seq) {
+                return;
+            }
+            state.playlists.loading = false;
+            setStatus('Could not load playlists: ' + err.message, true);
+        });
+    }
+
+    function renderPlaylists() {
+        var items = state.playlists.items;
+        var html = [];
+        var i, item, art, count;
+
+        if (!items.length) {
+            el.playlistList.innerHTML =
+                '<li class="empty">No playlists on this server.</li>';
+            return;
+        }
+
+        for (i = 0; i < items.length; i++) {
+            item = items[i];
+            count = parseInt(item.songCount, 10) || 0;
+            art = item.coverArt ?
+                '<span class="playlist-art" style="background-image:url(\'' +
+                    escapeHtml(state.client.coverArtUrl(item.coverArt, 144)) +
+                    '\')"></span>' :
+                '<span class="playlist-art empty"></span>';
+
+            html.push(
+                '<li class="playlist" data-index="' + i + '"' +
+                    ' data-id="' + escapeHtml(item.id || '') + '"' +
+                    ' data-name="' + escapeHtml(item.name) + '" tabindex="0">' +
+                    art +
+                    '<span class="playlist-text">' +
+                        '<span class="playlist-name">' +
+                            escapeHtml(item.name) + '</span>' +
+                        '<span class="playlist-sub">' +
+                            escapeHtml(item.owner || 'Playlist') + '</span>' +
+                    '</span>' +
+                    '<span class="playlist-count">' +
+                        count + (count === 1 ? ' song' : ' songs') +
+                    '</span>' +
+                '</li>'
+            );
+        }
+        el.playlistList.innerHTML = html.join('');
+    }
+
+    /*
+     * Servers disagree on the shape of getPlaylist: most return
+     * `playlist.entry[]`, but some older ones return a bare `playlist` array
+     * of songs. Both are normalised to a plain song array here.
+     */
+    function playlistEntries(response) {
+        var playlist = response && response.playlist;
+        if (!playlist) {
+            return [];
+        }
+        if (Object.prototype.toString.call(playlist) === '[object Array]') {
+            return playlist;
+        }
+        return playlist.entry || [];
+    }
+
+    /*
+     * Opening a playlist loads its entries and shows them as a track list.
+     * The entries are played through the same `state.songs` / `playIndex()`
+     * path as an album, so prev/next, the seeker, and the number-pad track
+     * jump all work unchanged.
+     */
+    function openPlaylist(playlist) {
+        if (!playlist) {
+            return;
+        }
+        setStatus('Loading ' + playlist.name + ' ...', false);
+
+        state.client.getPlaylist(playlist.id, function (response) {
+            var songs = playlistEntries(response);
+
+            state.playlistSongs = songs;
+            state.songs = songs;
+            state.currentIndex = -1;
+            el.playlistTitle.innerHTML = escapeHtml(playlist.name);
+            el.playlistCount.innerHTML = songs.length + ' song(s)';
+            renderPlaylistSongs(songs);
+            setStatus(songs.length + ' song(s) in ' + playlist.name + '.', false);
+            show('screen-playlist');
+            /* show() focused before the tracks were rendered; redo it now. */
+            focusFirst();
+        }, function (err) {
+            setStatus('Could not load playlist: ' + err.message, true);
+        });
+    }
+
+    function renderPlaylistSongs(songs) {
+        var html = [];
+        var i, song;
+
+        if (!songs.length) {
+            el.playlistSongs.innerHTML =
+                '<li class="empty">This playlist is empty.</li>';
+            return;
+        }
+
+        for (i = 0; i < songs.length; i++) {
+            song = songs[i];
+            html.push(
+                '<li class="track" data-index="' + i + '"' +
+                    ' data-id="' + escapeHtml(song.id || '') + '"' +
+                    ' data-title="' + escapeHtml(song.title) + '" tabindex="0">' +
+                    '<span class="track-num">' + (i + 1) + '</span>' +
+                    '<span class="track-title">' + escapeHtml(song.title) +
+                        '<span class="track-artist">' +
+                            escapeHtml(song.artist || '') + '</span>' +
+                    '</span>' +
+                    '<span class="track-dur">' +
+                        formatDuration(song.duration) + '</span>' +
+                '</li>'
+            );
+        }
+        el.playlistSongs.innerHTML = html.join('');
+    }
+
+    function activatePlaylist(node) {
+        var index = indexOfNode(node);
+        var playlist = state.playlists.items[index];
+        if (playlist) {
+            openPlaylist(playlist);
         }
     }
 
@@ -1240,6 +1588,9 @@
         el.audio.src = state.client.streamUrl(song.id);
         el.audio.play();
 
+        /* Feed the Recently Played row. */
+        recordPlay(song);
+
         el.nowPlaying.innerHTML = escapeHtml(song.title) +
             '<span class="np-artist">' + escapeHtml(song.artist) + '</span>';
 
@@ -1602,7 +1953,8 @@
     function focusables() {
         return visible(document.querySelectorAll(
             '.screen.active .card, .screen.active .track, .screen.active .result, ' +
-            '.screen.active .artist, .screen.active .index-letter, ' +
+            '.screen.active .artist, .screen.active .playlist, ' +
+            '.screen.active .index-letter, ' +
             '.screen.active .key, .screen.active button, .screen.active input'
         ));
     }
@@ -1615,7 +1967,8 @@
             if (nodes[i].className.indexOf('card') >= 0 ||
                     nodes[i].className.indexOf('track') >= 0 ||
                     nodes[i].className.indexOf('result') >= 0 ||
-                    nodes[i].className.indexOf('artist') >= 0) {
+                    nodes[i].className.indexOf('artist') >= 0 ||
+                    nodes[i].className.indexOf('playlist') >= 0) {
                 focusNode(nodes[i]);
                 return;
             }
@@ -1870,6 +2223,58 @@
         return false;
     }
 
+    /*
+     * The Playlists screen is a plain vertical list, so Up/Down walk it and
+     * Up from the first row hands off to the nav bar.
+     */
+    function playlistRows() {
+        return visible(el.playlistList.querySelectorAll('.playlist'));
+    }
+
+    function movePlaylistList(delta) {
+        var rows = playlistRows();
+        var index = indexIn(rows, document.activeElement);
+        var target;
+
+        if (!rows.length) {
+            return;
+        }
+        if (index < 0) {
+            focusNode(rows[0]);
+            return;
+        }
+        target = index + delta;
+        if (target >= 0 && target < rows.length) {
+            focusNode(rows[target]);
+        } else if (delta < 0) {
+            /* Above the first playlist is the nav bar. */
+            focusNav();
+        }
+    }
+
+    /*
+     * The playlist detail screen is a vertical track list. Up/Down walk the
+     * tracks only — `moveFocus()` would also step onto the "back" button in
+     * the header, so the D-pad could leave the list and land on chrome.
+     */
+    function movePlaylistTracks(delta) {
+        var rows = visible(el.playlistSongs.querySelectorAll('.track'));
+        var index = indexIn(rows, document.activeElement);
+        var target;
+
+        if (!rows.length) {
+            return;
+        }
+        if (index < 0) {
+            focusNode(rows[0]);
+            return;
+        }
+        target = index + delta;
+        if (target >= 0 && target < rows.length) {
+            focusNode(rows[target]);
+        }
+    }
+
     /* Move along the nav bar, wrapping at the ends. */
     function moveNav(delta) {
         var nodes = navFocusables();
@@ -2103,7 +2508,12 @@
             if ($('screen-now').className.indexOf('active') >= 0) {
                 if (key === 37 || key === 39) {
                     event.preventDefault();
-                    moveNowActions(key === 39 ? 1 : -1);
+                    if (target && target.className.indexOf('tab') >= 0) {
+                        /* Walk along the nav bar, not the transport buttons. */
+                        moveNav(key === 39 ? 1 : -1);
+                    } else {
+                        moveNowActions(key === 39 ? 1 : -1);
+                    }
                 } else if (key === 38) {
                     event.preventDefault();
                     focusNav();
@@ -2157,6 +2567,59 @@
                     } else {
                         show('screen-albums');
                     }
+                }
+                return;
+            }
+
+            /*
+             * The Playlists screen is a vertical list of playlists. Up/Down
+             * walk it, Enter opens the focused playlist, and Back returns to
+             * the album list.
+             */
+            if ($('screen-playlists').className.indexOf('active') >= 0) {
+                if (key === 38 || key === 40) {
+                    event.preventDefault();
+                    movePlaylistList(key === 40 ? 1 : -1);
+                } else if (key === 37 || key === 39) {
+                    /*
+                     * Left/Right only mean something on the nav bar. Without
+                     * this the key fell through to the generic handler, which
+                     * has no grid to walk here, so the toolbar stayed stuck on
+                     * whichever tab the Up handoff landed on.
+                     */
+                    if (target && target.className.indexOf('tab') >= 0) {
+                        event.preventDefault();
+                        moveNav(key === 39 ? 1 : -1);
+                    }
+                } else if (key === 10009 || key === 461) {
+                    event.preventDefault();
+                    if (target && target.className.indexOf('playlist') >= 0) {
+                        /* Back out of the list to the nav bar. */
+                        focusNav();
+                    } else {
+                        show('screen-albums');
+                    }
+                }
+                return;
+            }
+
+            /*
+             * The playlist detail screen is a vertical track list, so Up/Down
+             * walk it and Back returns to the playlist list.
+             */
+            if ($('screen-playlist').className.indexOf('active') >= 0) {
+                if (key === 38 || key === 40) {
+                    event.preventDefault();
+                    movePlaylistTracks(key === 40 ? 1 : -1);
+                } else if (key === 37 || key === 39) {
+                    /* Left/Right only mean something on the nav bar. */
+                    if (target && target.className.indexOf('tab') >= 0) {
+                        event.preventDefault();
+                        moveNav(key === 39 ? 1 : -1);
+                    }
+                } else if (key === 10009 || key === 461) {
+                    event.preventDefault();
+                    show('screen-playlists');
                 }
                 return;
             }
@@ -2500,6 +2963,11 @@
                         show('screen-artists');
                         loadArtists();
                     }
+                } else if (tab === 'playlists') {
+                    if (state.client) {
+                        show('screen-playlists');
+                        loadPlaylists();
+                    }
                 } else if (tab === 'search') {
                     if (state.client) {
                         show('screen-search');
@@ -2577,6 +3045,10 @@
         el.artistTitle = $('artist-title');
         el.artistCount = $('artist-count');
         el.artistAlbums = $('artist-albums');
+        el.playlistList = $('playlist-list');
+        el.playlistSongs = $('playlist-songs');
+        el.playlistTitle = $('playlist-title');
+        el.playlistCount = $('playlist-count');
         el.npCover = $('np-cover');
         el.npLyrics = $('np-lyrics');
         el.npTitle = $('np-title');
@@ -2606,6 +3078,10 @@
             show('screen-artists');
         }, false);
 
+        $('back-to-playlists').addEventListener('click', function () {
+            show('screen-playlists');
+        }, false);
+
         $('btn-prev').addEventListener('click', playPrev, false);
         $('btn-next').addEventListener('click', playNext, false);
         el.playBtn.addEventListener('click', togglePlayPause, false);
@@ -2627,6 +3103,10 @@
         bindList(el.searchResults, activateResult);
         bindList(el.artistList, activateArtist);
         bindList(el.artistAlbums, activateCard);
+        bindList(el.playlistList, activatePlaylist);
+        bindList(el.playlistSongs, function (node) {
+            playIndex(indexOfNode(node));
+        });
         bindArtistIndex();
         bindTabs();
         bindTheme();
@@ -2665,6 +3145,9 @@
         get artists() { return state.artists.items.slice(); },
         get artistLetters() { return state.artists.letters.slice(); },
         get artistAlbums() { return state.artistAlbums.slice(); },
+        get playlists() { return state.playlists.items.slice(); },
+        get playlistSongs() { return state.playlistSongs.slice(); },
+        get history() { return loadHistory(); },
         setAvatar: setAvatar,
         searchKey: function (label) {
             var keys = el.keyboard.querySelectorAll('.key');
@@ -2679,6 +3162,18 @@
         },
         openAlbumById: function (id) {
             openAlbum({ id: id, name: '', artist: '' });
-        }
+        },
+        openSongById: function (id) {
+            var pool = SECTIONS.top.pool || [];
+            var i;
+            for (i = 0; i < pool.length; i++) {
+                if (pool[i].id === id) {
+                    openSong(pool[i]);
+                    return true;
+                }
+            }
+            return false;
+        },
+        recordPlayForTest: recordPlay
     };
 }(this));

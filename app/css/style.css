@@ -1209,6 +1209,89 @@ body.now-active #nav .avatar {
     text-align: right;
 }
 
+/* ---------- Playlists ---------- */
+
+/*
+ * A vertical list of playlists, matching the artist list: square art, name,
+ * and a song count. Playlists have no artist, so the subtitle is the count
+ * rather than a second name.
+ */
+.playlist-list {
+    list-style: none;
+}
+
+.playlist {
+    display: block;
+    padding: 14px 26px;
+    margin-bottom: 8px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.42);
+    cursor: pointer;
+    outline: none;
+}
+
+.playlist:focus {
+    background: #ffffff;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.9), 0 10px 26px rgba(23, 38, 61, 0.3);
+}
+
+.playlist-art {
+    display: inline-block;
+    vertical-align: middle;
+    width: 72px;
+    height: 72px;
+    margin-right: 24px;
+    border-radius: 8px;
+    background-color: rgba(23, 38, 61, 0.12);
+    background-size: cover;
+    background-position: center;
+}
+
+.playlist-art.empty:after {
+    content: '\2261';
+    display: block;
+    width: 100%;
+    height: 100%;
+    line-height: 72px;
+    text-align: center;
+    font-size: 34px;
+    color: rgba(23, 38, 61, 0.3);
+}
+
+.playlist-text {
+    display: inline-block;
+    vertical-align: middle;
+    width: 1180px;
+}
+
+.playlist-name {
+    display: block;
+    font-size: 28px;
+    font-weight: 600;
+    color: #171f2e;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.playlist-sub {
+    display: block;
+    margin-top: 4px;
+    font-size: 22px;
+    color: #6b6d7c;
+}
+
+.playlist-count {
+    display: inline-block;
+    vertical-align: middle;
+    width: 130px;
+    font-size: 20px;
+    color: #777988;
+    text-align: right;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
 /* ---------- Search results ---------- */
 
 .results {
@@ -1538,5 +1621,31 @@ body.dark .artist-name {
 
 body.dark .artist-sub,
 body.dark .artist-letter {
+    color: #9a9aa8;
+}
+
+body.dark .playlist {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+body.dark .playlist:focus {
+    background: rgba(255, 255, 255, 0.22);
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.85), 0 10px 26px rgba(0, 0, 0, 0.6);
+}
+
+body.dark .playlist-art {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+body.dark .playlist-art.empty:after {
+    color: rgba(255, 255, 255, 0.3);
+}
+
+body.dark .playlist-name {
+    color: #f2f2f7;
+}
+
+body.dark .playlist-sub,
+body.dark .playlist-count {
     color: #9a9aa8;
 }

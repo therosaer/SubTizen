@@ -16,6 +16,7 @@
     <div class="pill">
         <button class="tab active" id="tab-albums" data-tab="albums">Albums</button>
         <button class="tab" id="tab-artists" data-tab="artists">Artists</button>
+        <button class="tab" id="tab-playlists" data-tab="playlists">Playlists</button>
         <button class="tab" id="tab-search" data-tab="search">Search</button>
         <button class="tab" id="tab-now" data-tab="now">Now Playing</button>
     </div>
@@ -59,6 +60,12 @@
         <h2 class="section-title">Artists</h2>
         <div id="artist-index" class="artist-index"></div>
         <ul id="artist-list" class="artist-list"></ul>
+    </section>
+
+    <!-- Playlists -->
+    <section id="screen-playlists" class="screen">
+        <h2 class="section-title">Playlists</h2>
+        <ul id="playlist-list" class="playlist-list"></ul>
     </section>
 
     <!-- Search -->
@@ -125,6 +132,16 @@
             <span id="artist-count" class="sub"></span>
         </header>
         <ul id="artist-albums" class="grid"></ul>
+    </section>
+
+    <!-- Playlist detail -->
+    <section id="screen-playlist" class="screen">
+        <header class="detail-head">
+            <button id="back-to-playlists" class="back">&larr; Playlists</button>
+            <h2 id="playlist-title"></h2>
+            <span id="playlist-count" class="sub"></span>
+        </header>
+        <ul id="playlist-songs" class="tracklist"></ul>
     </section>
 
     <!-- Album detail -->
