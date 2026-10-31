@@ -55,6 +55,35 @@ button per letter actually present, and selecting one jumps to the first artist 
 Enter on an artist loads their albums via `getArtist` and shows them as a card row; Enter on
 a card opens the album, and Back returns to the artist rather than to Home.
 
+## Playlists
+
+Playlists come straight from the server via `getPlaylists` — the app keeps no local copy and
+offers no local editing, so what you see is whatever Navidrome/Airsonic/Subsonic holds for the
+logged-in user. Subsonic has no offset for this endpoint, so the whole set arrives at once and
+is rendered as a vertical list, the same shape as the artist list. Each row shows cover art,
+name, owner, and song count.
+
+Enter loads the playlist via `getPlaylist` and shows its entries as a track list. The entries
+are assigned to `state.songs` with `currentIndex = -1`, so playback reuses the album path
+unchanged — prev/next, the seeker, and the number-pad track jump all work without special
+cases.
+
+Two server quirks are handled:
+
+- **Empty playlists.** Navidrome returns `{"playlists":{}}` — an empty object with no
+  `playlist` key at all, not `"playlist":[]`. The `(response.playlists &&
+  response.playlists.playlist) || []` guard covers it.
+- **`getPlaylist` shape.** Most servers return `playlist.entry[]`, but some older ones return
+  a bare `playlist` array of songs. `playlistEntries()` normalises both.
+
+Navigation is split across two screens. On the list, Up/Down walk the playlists and Up from
+the first row hands off to the nav bar. On the detail screen, Up/Down walk the tracks via
+`movePlaylistTracks()` rather than the generic `moveFocus()` — `moveFocus()` walks *every*
+focusable, which would step onto the "back" button in the header and let the D-pad leave the
+list. Both screens handle Left/Right on the nav bar explicitly: their branches `return` early,
+so without that the key never reached the generic handler and the toolbar stayed stuck on
+whichever tab the Up handoff landed on.
+
 ## Search
 
 An on-screen keyboard plus a flat vertical result list, because a TV remote has no text
@@ -133,8 +162,8 @@ them. `setPlayIcon()` swaps the SVG markup rather than writing glyphs, for the s
 
 ## Navigation and theming
 
-The nav pill carries **Albums / Artists / Search / Now Playing**, all wired, plus a
-**Dark** / **Light** theme toggle at the right. The circular avatar to its left shows the
+The nav pill carries **Albums / Artists / Playlists / Search / Now Playing**, all wired, plus
+a **Dark** / **Light** theme toggle at the right. The circular avatar to its left shows the
 first letter of the signed-in username. The pill is hidden on the login screen, since there
 is nothing to navigate before a server is connected.
 

@@ -23,6 +23,7 @@ Apple Music–style interface with synced lyrics.
 - 🎵 **Plays your library** — streams from any Subsonic server, transcoding FLAC/Ogg to MP3
 - 🖼️ **Apple Music–style UI** — lavender gradient, translucent nav pill, artwork card rows
 - 🎛️ **Full remote support** — D-pad, media keys, number-pad track jumps
+- 📋 **Server playlists** — your Navidrome/Airsonic playlists, fetched live and playable
 - 🎤 **Synced lyrics** — per-line highlighting from LRCLIB, backdrop tinted from album art
 - 🌗 **Dark mode** — remembered across launches
 - 🔍 **Search** — on-screen keyboard, since a TV remote has no text input
@@ -33,6 +34,7 @@ Apple Music–style interface with synced lyrics.
 |---|---|
 | **Home** | Recently Played, Recently Added, and Top Picks as horizontal card rows that page as you scroll right |
 | **Artists** | Every artist A–Z, with a letter strip; Enter opens their albums |
+| **Playlists** | Playlists from the server, with owner and song count; Enter opens the track list |
 | **Search** | On-screen keyboard with debounced results, albums first then songs |
 | **Now Playing** | Large art, synced lyrics, seeker, and transport buttons |
 | **Transport bar** | Persistent on every screen except Now Playing |
@@ -64,6 +66,9 @@ Produces `dist/SubTizen.wgt`. Uses the Tizen Studio packager if installed at
 plain `zip` — which is what a `.wgt` is, and is enough for sideloading in developer mode.
 
 ## Install on the TV
+
+Grab `SubTizen.wgt` from the [latest release](../../releases/latest), or build it
+yourself with `./tools/package.sh`.
 
 1. On the TV: **Apps → Settings → Developer mode**, enable it, and set the host PC's IP.
 2. Reboot the TV, then:

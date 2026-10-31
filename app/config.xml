@@ -2,19 +2,18 @@
 <!--
   Tizen widget manifest.
 
-  `id` and the `tizen:application` package/application ids are placeholders.
-  Replace them with your own reverse-DNS id and your Tizen certificate's
-  package id before signing for the store; the values here are only valid for
-  sideloading in developer mode.
+  The `id` and `tizen:application` ids below are valid for sideloading in
+  developer mode. Signing for the Tizen store requires a certificate whose
+  package id matches `tizen:application/@package`.
 -->
 <widget xmlns="http://www.w3.org/ns/widgets"
         xmlns:tizen="http://tizen.org/ns/widgets"
-        id="http://example.org/subtizen"
+        id="https://github.com/therosaer/SubTizen"
         version="0.1.0"
         viewmodes="maximized">
 
-    <tizen:application id="subtz0n001.SubTizen"
-                       package="subtz0n001"
+    <tizen:application id="therosaer.SubTizen"
+                       package="therosaer"
                        required_version="2.4"/>
 
     <content src="index.html"/>
@@ -24,7 +23,8 @@
     <description>Subsonic client for Tizen TVs</description>
 
     <icon src="res/icon.png"/>
-    <author href="https://example.org" email="dev@example.org">SubTizen</author>
+    <author href="https://github.com/therosaer"
+            email="therosaer@users.noreply.github.com">therosaer</author>
 
     <!-- Required for XHR to arbitrary Subsonic servers -->
     <tizen:privilege name="http://tizen.org/privilege/internet"/>
