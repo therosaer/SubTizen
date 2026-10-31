@@ -1,0 +1,18 @@
+# Build output
+dist/
+
+# Local test media
+*.flac
+*.mp3
+*.m4a
+*.ogg
+*.opus
+*.wav
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/

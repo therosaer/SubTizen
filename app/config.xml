@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Tizen widget manifest.
+
+  `id` and the `tizen:application` package/application ids are placeholders.
+  Replace them with your own reverse-DNS id and your Tizen certificate's
+  package id before signing for the store; the values here are only valid for
+  sideloading in developer mode.
+-->
+<widget xmlns="http://www.w3.org/ns/widgets"
+        xmlns:tizen="http://tizen.org/ns/widgets"
+        id="http://example.org/subtizen"
+        version="0.1.0"
+        viewmodes="maximized">
+
+    <tizen:application id="subtz0n001.SubTizen"
+                       package="subtz0n001"
+                       required_version="2.4"/>
+
+    <content src="index.html"/>
+    <feature name="http://tizen.org/feature/screen.size.all"/>
+
+    <name>SubTizen</name>
+    <description>Subsonic client for Tizen TVs</description>
+
+    <icon src="res/icon.png"/>
+    <author href="https://example.org" email="dev@example.org">SubTizen</author>
+
+    <!-- Required for XHR to arbitrary Subsonic servers -->
+    <tizen:privilege name="http://tizen.org/privilege/internet"/>
+    <tizen:privilege name="http://tizen.org/privilege/network.get"/>
+
+    <!--
+      Required for tizen.tvinputdevice.registerKey(). Without this privilege
+      the registerKey() calls fail silently and media keys (play/pause/skip)
+      are never delivered to the page at all.
+    -->
+    <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
+
+    <tizen:setting screen-orientation="landscape"
+                   context-menu="disable"
+                   background-support="disable"
+                   encryption="disable"
+                   install-location="auto"
+                   hwkey-event="enable"/>
+
+    <access origin="*" subdomains="true"/>
+
+    <tizen:profile name="tv"/>
+</widget>

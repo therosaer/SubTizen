@@ -1,0 +1,1542 @@
+/*
+ * SubTizen - 10-foot UI for Tizen 2.4 TVs (1920x1080, D-pad driven).
+ *
+ * Visual language follows Apple Music on Apple TV: a soft lavender gradient
+ * backdrop, a translucent pill navigation bar with a white active tab, and
+ * large artwork cards whose lower band is tinted from the cover art.
+ *
+ * Tizen 2.4's WebKit is old, so this sticks to widely supported CSS:
+ * no CSS variables, no grid, no flex `gap` on the critical layout paths.
+ */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #cbd0e3;
+    color: #171f2e;
+    font-family: "Samsung One", "Tizen Sans", "Helvetica Neue", Arial, sans-serif;
+    font-size: 24px;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* The lavender wash behind everything. */
+#backdrop {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #cbd0e3;
+    background: -webkit-linear-gradient(top, #cbd0e3 0%, #cad1eb 45%, #c5c0c4 100%);
+    background: linear-gradient(to bottom, #cbd0e3 0%, #cad1eb 45%, #c5c0c4 100%);
+}
+
+#app {
+    position: absolute;
+    top: 150px;
+    left: 0;
+    right: 0;
+    bottom: 190px;
+}
+
+.screen {
+    display: none;
+    width: 100%;
+    height: 100%;
+    padding: 0 80px 40px;
+    /*
+     * `overflow-x: hidden` still makes this a horizontal scroll container, and
+     * the browser's focus-reveal will scroll it sideways to bring a focused
+     * card into view — dragging every row left/right together. `clip` is not
+     * available on Tizen 2.4, so the rows themselves scroll horizontally
+     * instead (see `.grid`) and the screen is pinned with `overflow: hidden`
+     * plus an explicit scroll reset in focusNode().
+     */
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.screen.active {
+    display: block;
+}
+
+/* ---------- Navigation pill ---------- */
+
+.hidden {
+    display: none;
+}
+
+#nav {
+    position: relative;
+    height: 150px;
+    padding: 40px 80px 0;
+}
+
+#nav .pill {
+    display: inline-block;
+    height: 70px;
+    margin-left: 100px;
+    padding: 0 10px;
+    border-radius: 35px;
+    background: rgba(166, 182, 198, 0.55);
+    white-space: nowrap;
+}
+
+#nav .tab {
+    display: inline-block;
+    height: 70px;
+    line-height: 70px;
+    padding: 0 34px;
+    border: 0;
+    border-radius: 35px;
+    background: transparent;
+    color: #17263d;
+    font-family: inherit;
+    font-size: 26px;
+    font-weight: 500;
+    cursor: pointer;
+    outline: none;
+    vertical-align: top;
+}
+
+#nav .tab.active {
+    background: #ffffff;
+    color: #000000;
+    font-weight: 600;
+}
+
+#nav .tab:focus {
+    background: #ffffff;
+    color: #000000;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.85), 0 6px 22px rgba(23, 38, 61, 0.35);
+}
+
+#nav .avatar {
+    position: absolute;
+    left: 80px;
+    top: 40px;
+    width: 70px;
+    height: 70px;
+    border-radius: 35px;
+    background: rgba(255, 255, 255, 0.75);
+    color: #17263d;
+    font-size: 30px;
+    font-weight: 600;
+    line-height: 70px;
+    text-align: center;
+    text-transform: uppercase;
+}
+
+#nav .theme-toggle {
+    position: absolute;
+    right: 80px;
+    top: 40px;
+    height: 70px;
+    line-height: 70px;
+    padding: 0 30px;
+    border: 0;
+    border-radius: 35px;
+    background: rgba(166, 182, 198, 0.55);
+    color: #17263d;
+    font-family: inherit;
+    font-size: 24px;
+    font-weight: 500;
+    cursor: pointer;
+    outline: none;
+}
+
+#nav .theme-toggle:focus {
+    background: #ffffff;
+    color: #000000;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.85), 0 6px 22px rgba(23, 38, 61, 0.35);
+}
+
+/* ---------- Section headings ---------- */
+
+.section-title {
+    font-size: 34px;
+    font-weight: 700;
+    color: #4d4f5d;
+    margin: 10px 0 22px;
+}
+
+/*
+ * Moving up/down between rows slides the newly focused row in from the
+ * direction of travel, so vertical navigation reads as motion too.
+ */
+@-webkit-keyframes row-in-down {
+    from { -webkit-transform: translateY(26px); opacity: 0.55; }
+    to   { -webkit-transform: translateY(0);    opacity: 1; }
+}
+
+@keyframes row-in-down {
+    from { transform: translateY(26px); opacity: 0.55; }
+    to   { transform: translateY(0);    opacity: 1; }
+}
+
+@-webkit-keyframes row-in-up {
+    from { -webkit-transform: translateY(-26px); opacity: 0.55; }
+    to   { -webkit-transform: translateY(0);     opacity: 1; }
+}
+
+@keyframes row-in-up {
+    from { transform: translateY(-26px); opacity: 0.55; }
+    to   { transform: translateY(0);     opacity: 1; }
+}
+
+.grid.row-in-down {
+    -webkit-animation: row-in-down 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    animation: row-in-down 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.grid.row-in-up {
+    -webkit-animation: row-in-up 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    animation: row-in-up 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.section-sub {
+    font-size: 26px;
+    font-weight: 600;
+    color: #777988;
+    margin: 34px 0 18px;
+}
+
+/* ---------- Card row (horizontal) ---------- */
+
+/*
+ * Each home section is a horizontal row of cards, matching the Apple Music
+ * reference: artwork on top, title and subtitle underneath. Left/Right walk
+ * along the row; Up/Down move between rows and sections.
+ */
+.grid {
+    list-style: none;
+    font-size: 0;
+    /*
+     * A flex row rather than `white-space: nowrap` + inline-block cards.
+     * Transforms on a flex item are purely visual, so scaling the focused card
+     * no longer widens its layout box and shoves the rest of the row sideways.
+     * The row is its own horizontal scroll container, so walking right scrolls
+     * only this row and never the whole screen.
+     */
+    display: -webkit-box;
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-wrap: nowrap;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* Hide the scrollbar; the row is driven by the D-pad, not a pointer. */
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.grid::-webkit-scrollbar {
+    display: none;
+}
+
+.card {
+    display: inline-block;
+    vertical-align: top;
+    width: 300px;
+    /*
+     * Flex items shrink by default, which would squash the cards. Pin the
+     * basis so every card keeps its 300px box regardless of row width.
+     */
+    -webkit-flex: 0 0 300px;
+    flex: 0 0 300px;
+    margin: 0 26px 0 0;
+    border-radius: 14px;
+    overflow: hidden;
+    background: transparent;
+    cursor: pointer;
+    outline: none;
+    /*
+     * The focus animation scales the card. On an inline-block that scale would
+     * widen the inline box and shove every following card in the row to the
+     * right, so the whole row appeared to move instead of just the focused
+     * card. `position: relative` plus a transform that only paints keeps the
+     * layout box fixed at 300px and confines the movement to the card itself.
+     */
+    position: relative;
+    -webkit-transition: -webkit-transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/*
+ * Navigating left/right lifts the card and settles it back down, so the
+ * movement reads as motion rather than an instant jump. The keyframes are
+ * applied on focus, which the D-pad handler triggers on every arrow press.
+ */
+@-webkit-keyframes card-settle {
+    0%   { -webkit-transform: scale(1.06) translateY(0); }
+    45%  { -webkit-transform: scale(1.10) translateY(-10px); }
+    100% { -webkit-transform: scale(1.06) translateY(0); }
+}
+
+@keyframes card-settle {
+    0%   { transform: scale(1.06) translateY(0); }
+    45%  { transform: scale(1.10) translateY(-10px); }
+    100% { transform: scale(1.06) translateY(0); }
+}
+
+.card:focus {
+    -webkit-transform: scale(1.06);
+    transform: scale(1.06);
+    -webkit-animation: card-settle 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    animation: card-settle 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/*
+ * Re-focusing the same card (e.g. after a page append) must not replay the
+ * animation, so the class is only added when focus actually changes.
+ */
+.card.settled:focus {
+    -webkit-animation: none;
+    animation: none;
+}
+
+.card .art {
+    display: block;
+    width: 300px;
+    height: 300px;
+    border-radius: 12px;
+    background: #2a2a2a;
+    background-size: cover;
+    background-position: center;
+    box-shadow: 0 10px 26px rgba(23, 38, 61, 0.28);
+}
+
+.card .art-fallback {
+    display: block;
+    width: 300px;
+    height: 300px;
+    line-height: 300px;
+    border-radius: 12px;
+    text-align: center;
+    font-size: 96px;
+    color: rgba(255, 255, 255, 0.35);
+    background: #2a2a2a;
+    box-shadow: 0 10px 26px rgba(23, 38, 61, 0.28);
+}
+
+.card:focus .art,
+.card:focus .art-fallback {
+    box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.95), 0 16px 34px rgba(23, 38, 61, 0.4);
+}
+
+/*
+ * The text block sits under the artwork and is transparent, so no tinted
+ * band shows through between the cover art and the title.
+ */
+.card .body {
+    display: block;
+    width: 300px;
+    padding: 14px 4px 0;
+    background: transparent;
+    color: #171f2e;
+    text-align: left;
+    white-space: normal;
+}
+
+.card .card-title {
+    display: block;
+    font-size: 26px;
+    font-weight: 600;
+    line-height: 1.2;
+    max-height: 32px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.card .card-sub {
+    display: block;
+    margin-top: 6px;
+    font-size: 22px;
+    color: #6b6d7c;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.card.playing .card-title {
+    color: #1a7f37;
+}
+
+/* ---------- Track list (album detail) ---------- */
+
+.tracklist {
+    list-style: none;
+    margin-top: 8px;
+}
+
+.track {
+    display: block;
+    padding: 18px 26px;
+    margin-bottom: 8px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.42);
+    cursor: pointer;
+    outline: none;
+}
+
+.track:focus {
+    background: #ffffff;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.9), 0 10px 26px rgba(23, 38, 61, 0.3);
+}
+
+.track-num {
+    display: inline-block;
+    width: 64px;
+    color: #777988;
+    font-size: 24px;
+    text-align: right;
+}
+
+.track-title {
+    display: inline-block;
+    width: 1180px;
+    padding-left: 26px;
+    font-size: 28px;
+    color: #171f2e;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+}
+
+.track-dur {
+    display: inline-block;
+    width: 110px;
+    color: #777988;
+    font-size: 24px;
+    text-align: right;
+}
+
+.track.playing .track-title {
+    color: #1a7f37;
+    font-weight: 600;
+}
+
+/* ---------- Album detail header ---------- */
+
+.detail-head {
+    margin-bottom: 26px;
+}
+
+.detail-head .back {
+    display: inline-block;
+    height: 56px;
+    line-height: 56px;
+    padding: 0 26px;
+    margin-bottom: 18px;
+    border: 0;
+    border-radius: 28px;
+    background: rgba(255, 255, 255, 0.6);
+    color: #17263d;
+    font-family: inherit;
+    font-size: 24px;
+    cursor: pointer;
+    outline: none;
+}
+
+.detail-head .back:focus {
+    background: #ffffff;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.9), 0 8px 22px rgba(23, 38, 61, 0.3);
+}
+
+.detail-head h2 {
+    font-size: 44px;
+    font-weight: 700;
+    color: #2b2d3a;
+}
+
+.detail-head .sub {
+    font-size: 26px;
+    color: #777988;
+}
+
+/* ---------- Now Playing ---------- */
+
+/*
+ * The Now Playing tab is a full-bleed stage: large artwork on the left and the
+ * lyrics the server returns for the track on the right. The backdrop is tinted
+ * from the cover art at runtime (see tintNowPlaying()), so the screen reads as
+ * one continuous surface rather than a panel floating on the lavender
+ * backdrop. The gradient below is only the fallback for when nothing is
+ * playing or the artwork cannot be sampled.
+ */
+#screen-now {
+    padding: 0;
+    overflow: hidden;
+    background: #2a1a3a;
+    background: -webkit-linear-gradient(top left, #3a1f4d 0%, #2a1a3a 55%, #1d1229 100%);
+    background: linear-gradient(to bottom right, #3a1f4d 0%, #2a1a3a 55%, #1d1229 100%);
+}
+
+#screen-now .np-stage {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 60px 80px 0;
+}
+
+#screen-now .np-cover {
+    position: absolute;
+    left: 80px;
+    top: 60px;
+    width: 520px;
+    height: 520px;
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.08);
+    background-size: cover;
+    background-position: center;
+    box-shadow: 0 30px 70px rgba(0, 0, 0, 0.55);
+}
+
+#screen-now .np-cover.empty:after {
+    content: '\266B';
+    display: block;
+    width: 100%;
+    height: 100%;
+    line-height: 520px;
+    text-align: center;
+    font-size: 160px;
+    color: rgba(255, 255, 255, 0.22);
+}
+
+#screen-now .np-info {
+    position: absolute;
+    left: 680px;
+    right: 80px;
+    top: 60px;
+    bottom: 0;
+}
+
+/*
+ * Lyrics are a short window of lines rather than a scrolling page: the
+ * current line is bright and the surrounding lines fade out, which is what
+ * the reference layout does. The window is clipped so a long lyric cannot
+ * push the metadata off the screen.
+ */
+#screen-now .np-lyrics {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    margin-top: -150px;
+    height: 300px;
+    overflow: hidden;
+    font-size: 46px;
+    font-weight: 700;
+    line-height: 1.35;
+    color: rgba(255, 255, 255, 0.28);
+}
+
+#screen-now .np-line {
+    display: block;
+    margin-bottom: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    -webkit-transition: color 200ms linear;
+    transition: color 200ms linear;
+}
+
+#screen-now .np-line.current {
+    color: #ffffff;
+}
+
+#screen-now .np-line.past {
+    color: rgba(255, 255, 255, 0.16);
+}
+
+#screen-now .np-meta {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 250px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#screen-now .np-title {
+    display: block;
+    font-size: 30px;
+    font-weight: 600;
+    color: #ffffff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#screen-now .np-artist,
+#screen-now .np-album {
+    display: block;
+    margin-top: 4px;
+    font-size: 24px;
+    color: rgba(255, 255, 255, 0.6);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/*
+ * The seeker and transport controls live on this screen rather than in the
+ * persistent bar, which is hidden while Now Playing is up. They are laid out
+ * as a row: the seeker takes the width and the buttons sit at the right, so
+ * the whole control cluster reads as one line under the artwork.
+ */
+#screen-now .np-bar {
+    position: absolute;
+    left: 80px;
+    right: 80px;
+    bottom: 70px;
+    height: 110px;
+}
+
+#screen-now .np-seek {
+    position: absolute;
+    left: 0;
+    right: 400px;
+    top: 50%;
+    margin-top: -13px;
+    height: 26px;
+    font-size: 0;
+}
+
+#screen-now .np-time {
+    display: inline-block;
+    vertical-align: middle;
+    width: 80px;
+    font-size: 22px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+#screen-now #np-total {
+    text-align: right;
+}
+
+#screen-now .np-seek-track {
+    display: inline-block;
+    vertical-align: middle;
+    width: 1000px;
+    height: 8px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.22);
+    overflow: hidden;
+}
+
+#screen-now .np-seek-fill {
+    width: 0;
+    height: 8px;
+    border-radius: 4px;
+    background: #ffffff;
+}
+
+#screen-now .np-actions {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 380px;
+    height: 110px;
+    text-align: right;
+}
+
+#screen-now .np-actions button {
+    width: 90px;
+    height: 90px;
+    margin-left: 20px;
+    border: 0;
+    border-radius: 45px;
+    background: rgba(255, 255, 255, 0.16);
+    color: #ffffff;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    vertical-align: middle;
+    padding: 0;
+    line-height: 0;
+}
+
+#screen-now .np-actions button svg {
+    width: 40px;
+    height: 40px;
+    fill: currentColor;
+    display: block;
+    margin: 0 auto;
+    pointer-events: none;
+}
+
+#screen-now .np-actions button:focus {
+    background: #ffffff;
+    color: #2a1a3a;
+    box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.9), 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+/*
+ * The persistent transport bar is redundant on this screen — the same seeker
+ * and buttons are on the page itself — so it is hidden while Now Playing is
+ * active. `#app` is stretched to the bottom edge to reclaim the space.
+ */
+body.now-active #transport {
+    display: none;
+}
+
+body.now-active #app {
+    bottom: 0;
+}
+
+/*
+ * The nav bar sits above `#app`, so its own chrome would cut the album tint
+ * off at the top of the screen. On Now Playing the pill and the theme button
+ * are made translucent and the bar itself is left unpainted, so the tint
+ * painted on `#backdrop` shows through and the colour runs edge to edge.
+ */
+body.now-active #nav .pill,
+body.now-active #nav .theme-toggle {
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+}
+
+body.now-active #nav .tab {
+    color: rgba(255, 255, 255, 0.85);
+}
+
+body.now-active #nav .tab.active {
+    background: rgba(255, 255, 255, 0.92);
+    color: #1a1024;
+}
+
+body.now-active #nav .avatar {
+    background: rgba(255, 255, 255, 0.28);
+    color: #ffffff;
+}
+
+/* ---------- Connect screen ---------- */
+
+#screen-connect {
+    padding-top: 40px;
+}
+
+#screen-connect .panel {
+    width: 900px;
+    margin: 0 auto;
+    padding: 50px 60px 60px;
+    border-radius: 24px;
+    background: rgba(255, 255, 255, 0.72);
+    box-shadow: 0 24px 60px rgba(23, 38, 61, 0.25);
+}
+
+#screen-connect h1 {
+    font-size: 58px;
+    font-weight: 700;
+    color: #2b2d3a;
+    letter-spacing: -1px;
+}
+
+#screen-connect .hint {
+    margin-top: 6px;
+    font-size: 24px;
+    color: #777988;
+}
+
+#connect-form label {
+    display: block;
+    margin: 26px 0 8px;
+    color: #777988;
+    font-size: 20px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+#connect-form input {
+    width: 100%;
+    padding: 16px 22px;
+    font-family: inherit;
+    font-size: 28px;
+    color: #171f2e;
+    background: #ffffff;
+    border: 3px solid rgba(23, 38, 61, 0.18);
+    border-radius: 12px;
+    outline: none;
+}
+
+#connect-form input:focus {
+    border-color: #0a84ff;
+    box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.35);
+}
+
+#btn-connect {
+    width: 100%;
+    margin-top: 36px;
+    padding: 18px 32px;
+    border: 0;
+    border-radius: 14px;
+    background: #0a84ff;
+    color: #ffffff;
+    font-family: inherit;
+    font-size: 30px;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+}
+
+#btn-connect:focus {
+    background: #0071e3;
+    box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.95), 0 10px 30px rgba(10, 132, 255, 0.5);
+}
+
+/* ---------- Transport ---------- */
+
+#transport {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 190px;
+    padding: 0 80px;
+    background: rgba(255, 255, 255, 0.55);
+    border-top: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+/*
+ * Album art at the left of the transport bar. The now-playing text sits to
+ * its right, so the text's left offset is the art's width plus the gap.
+ */
+#transport .np-art {
+    position: absolute;
+    left: 80px;
+    top: 22px;
+    width: 96px;
+    height: 96px;
+    border-radius: 10px;
+    background-color: rgba(23, 38, 61, 0.12);
+    background-size: cover;
+    background-position: center;
+    box-shadow: 0 6px 18px rgba(23, 38, 61, 0.28);
+}
+
+#transport .np-art.empty {
+    background-image: none;
+}
+
+/* The music-note placeholder shown before anything has played. */
+#transport .np-art.empty:after {
+    content: '\266B';
+    display: -webkit-box;
+    display: -webkit-flex;
+    display: flex;
+    -webkit-box-align: center;
+    -webkit-align-items: center;
+    align-items: center;
+    -webkit-box-pack: center;
+    -webkit-justify-content: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    font-size: 40px;
+    line-height: 1;
+    color: rgba(23, 38, 61, 0.3);
+}
+
+#transport .np {
+    position: absolute;
+    left: 196px;
+    top: 26px;
+    width: 520px;
+    font-size: 28px;
+    font-weight: 600;
+    color: #2b2d3a;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#transport .np-artist {
+    display: block;
+    font-size: 22px;
+    font-weight: 400;
+    color: #777988;
+}
+
+#transport .controls {
+    position: absolute;
+    left: 50%;
+    top: 30px;
+    margin-left: -190px;
+    width: 380px;
+    text-align: center;
+}
+
+#transport .controls button {
+    width: 70px;
+    height: 70px;
+    margin: 0 12px;
+    border: 0;
+    border-radius: 35px;
+    background: rgba(255, 255, 255, 0.85);
+    color: #17263d;
+    font-family: inherit;
+    font-size: 26px;
+    cursor: pointer;
+    outline: none;
+    vertical-align: top;
+    padding: 0;
+    line-height: 0;
+}
+
+/*
+ * The transport glyphs are inline SVG rather than Unicode symbols: Tizen 2.4's
+ * system font has no coverage for U+23EE/U+23ED, so those rendered as tofu
+ * boxes with a stray line through them.
+ */
+#transport .controls button svg {
+    width: 34px;
+    height: 34px;
+    fill: currentColor;
+    display: block;
+    margin: 0 auto;
+    pointer-events: none;
+}
+
+#transport .controls button:focus {
+    background: #ffffff;
+    box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.95), 0 8px 24px rgba(23, 38, 61, 0.35);
+}
+
+#transport .status {
+    position: absolute;
+    right: 80px;
+    top: 52px;
+    width: 560px;
+    text-align: right;
+    font-size: 20px;
+    color: #777988;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#transport .status.error {
+    color: #c0392b;
+}
+
+/*
+ * On-screen key diagnostic, shown by pressing 0 three times. It exists because
+ * a TV has no readable console, and some remotes send media keys with codes
+ * the app cannot predict.
+ */
+.key-diag {
+    display: none;
+    position: fixed;
+    left: 40px;
+    top: 40px;
+    z-index: 9999;
+    padding: 18px 26px;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.82);
+    color: #fff;
+    font-size: 26px;
+    line-height: 1.5;
+    font-family: monospace;
+}
+
+/* ---------- Seeker ---------- */
+
+#transport .seek {
+    position: absolute;
+    left: 80px;
+    right: 80px;
+    bottom: 18px;
+    height: 26px;
+    font-size: 0;
+}
+
+#transport .seek-time {
+    display: inline-block;
+    vertical-align: middle;
+    width: 70px;
+    font-size: 20px;
+    color: #777988;
+}
+
+#transport #seek-total {
+    text-align: right;
+}
+
+#transport .seek-track {
+    display: inline-block;
+    vertical-align: middle;
+    width: 1620px;
+    height: 8px;
+    border-radius: 4px;
+    background: rgba(23, 38, 61, 0.18);
+    overflow: hidden;
+}
+
+#transport .seek-fill {
+    width: 0;
+    height: 8px;
+    border-radius: 4px;
+    background: #0a84ff;
+}
+
+.empty {
+    padding: 40px 0;
+    font-size: 26px;
+    color: #777988;
+}
+
+/* ---------- Search ---------- */
+
+/*
+ * A TV remote has no keyboard, so the query is typed on an on-screen keyboard
+ * driven by the D-pad. The query is shown in a read-only field rather than an
+ * <input>, because focusing a real input would let the TV's own IME cover the
+ * results and would swallow the number keys the keyboard needs.
+ */
+.search-box {
+    height: 84px;
+    line-height: 84px;
+    padding: 0 30px;
+    margin-bottom: 26px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.72);
+    box-shadow: 0 10px 26px rgba(23, 38, 61, 0.18);
+    font-size: 34px;
+    color: #171f2e;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.search-query {
+    vertical-align: middle;
+}
+
+/* Blinking caret, so an empty query still reads as "type here". */
+.search-caret {
+    display: inline-block;
+    width: 3px;
+    height: 40px;
+    margin-left: 4px;
+    vertical-align: middle;
+    background: #0a84ff;
+    -webkit-animation: caret-blink 1s steps(1) infinite;
+    animation: caret-blink 1s steps(1) infinite;
+}
+
+@-webkit-keyframes caret-blink {
+    0%, 49%   { opacity: 1; }
+    50%, 100% { opacity: 0; }
+}
+
+@keyframes caret-blink {
+    0%, 49%   { opacity: 1; }
+    50%, 100% { opacity: 0; }
+}
+
+/*
+ * The keyboard is a stack of explicit row blocks rather than one wrapping
+ * flow: Tizen 2.4's WebKit predates flex and grid, and letting the keys wrap
+ * at the container width pulls a key from the next row onto the current line,
+ * which shifts every row after the first.
+ */
+.keyboard {
+    width: 1060px;
+    margin-bottom: 30px;
+    font-size: 0;
+}
+
+/* One row of keys. 10 keys at 96px + 10px margin is exactly 1060px. */
+.key-row {
+    white-space: nowrap;
+    font-size: 0;
+}
+
+.key {
+    display: inline-block;
+    vertical-align: top;
+    width: 96px;
+    height: 76px;
+    line-height: 76px;
+    margin: 0 10px 10px 0;
+    border: 0;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.62);
+    color: #17263d;
+    font-family: inherit;
+    font-size: 28px;
+    font-weight: 600;
+    text-align: center;
+    cursor: pointer;
+    outline: none;
+}
+
+.key:focus {
+    background: #ffffff;
+    color: #000000;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.95), 0 8px 22px rgba(23, 38, 61, 0.35);
+}
+
+/* The wide keys (Space / Delete / Clear) span several key widths. */
+.key.wide {
+    width: 206px;
+}
+
+.key.wider {
+    width: 316px;
+}
+
+/* ---------- Artists ---------- */
+
+/*
+ * The A-Z strip is a wrapping row of letter buttons above the artist list.
+ * It is a block of inline-block buttons rather than a flex row, matching the
+ * on-screen keyboard, because Tizen 2.4's WebKit predates flex `gap`.
+ */
+.artist-index {
+    margin-bottom: 22px;
+    font-size: 0;
+}
+
+.index-letter {
+    display: inline-block;
+    width: 62px;
+    height: 62px;
+    line-height: 62px;
+    margin: 0 10px 10px 0;
+    padding: 0;
+    border: 0;
+    border-radius: 31px;
+    background: rgba(255, 255, 255, 0.42);
+    color: #17263d;
+    font-family: inherit;
+    font-size: 24px;
+    font-weight: 600;
+    text-align: center;
+    cursor: pointer;
+    outline: none;
+}
+
+.index-letter:focus {
+    background: #ffffff;
+    color: #000000;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.9), 0 8px 22px rgba(23, 38, 61, 0.3);
+}
+
+.artist-list {
+    list-style: none;
+}
+
+.artist {
+    display: block;
+    padding: 14px 26px;
+    margin-bottom: 8px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.42);
+    cursor: pointer;
+    outline: none;
+}
+
+.artist:focus {
+    background: #ffffff;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.9), 0 10px 26px rgba(23, 38, 61, 0.3);
+}
+
+.artist-art {
+    display: inline-block;
+    vertical-align: middle;
+    width: 72px;
+    height: 72px;
+    margin-right: 24px;
+    border-radius: 36px;
+    background-color: rgba(23, 38, 61, 0.12);
+    background-size: cover;
+    background-position: center;
+}
+
+.artist-art.empty:after {
+    content: '\266B';
+    display: block;
+    width: 100%;
+    height: 100%;
+    line-height: 72px;
+    text-align: center;
+    font-size: 30px;
+    color: rgba(23, 38, 61, 0.3);
+}
+
+.artist-text {
+    display: inline-block;
+    vertical-align: middle;
+    width: 1180px;
+}
+
+.artist-name {
+    display: block;
+    font-size: 28px;
+    font-weight: 600;
+    color: #171f2e;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.artist-sub {
+    display: block;
+    margin-top: 4px;
+    font-size: 22px;
+    color: #6b6d7c;
+}
+
+.artist-letter {
+    display: inline-block;
+    vertical-align: middle;
+    width: 60px;
+    font-size: 24px;
+    font-weight: 600;
+    color: #777988;
+    text-align: right;
+}
+
+/* ---------- Search results ---------- */
+
+.results {
+    list-style: none;
+}
+
+.result {
+    display: block;
+    padding: 16px 26px;
+    margin-bottom: 8px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.42);
+    cursor: pointer;
+    outline: none;
+}
+
+.result:focus {
+    background: #ffffff;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.9), 0 10px 26px rgba(23, 38, 61, 0.3);
+}
+
+.result-art {
+    display: inline-block;
+    vertical-align: middle;
+    width: 72px;
+    height: 72px;
+    margin-right: 24px;
+    border-radius: 8px;
+    background-color: rgba(23, 38, 61, 0.12);
+    background-size: cover;
+    background-position: center;
+}
+
+.result-art.empty:after {
+    content: '\266B';
+    display: block;
+    width: 100%;
+    height: 100%;
+    line-height: 72px;
+    text-align: center;
+    font-size: 30px;
+    color: rgba(23, 38, 61, 0.3);
+}
+
+.result-text {
+    display: inline-block;
+    vertical-align: middle;
+    width: 1180px;
+}
+
+.result-title {
+    display: block;
+    font-size: 28px;
+    font-weight: 600;
+    color: #171f2e;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.result-sub {
+    display: block;
+    margin-top: 4px;
+    font-size: 22px;
+    color: #6b6d7c;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.result-kind {
+    display: inline-block;
+    vertical-align: middle;
+    width: 130px;
+    font-size: 20px;
+    color: #777988;
+    text-align: right;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+/* ---------- Dark mode ---------- */
+
+/*
+ * Tizen 2.4's WebKit has no CSS custom properties, so the dark theme is a
+ * set of overrides keyed off a `dark` class on <body> rather than a variable
+ * swap. Every rule that sets a light colour above needs a counterpart here.
+ */
+
+body.dark {
+    background: #0b0b0f;
+    color: #f2f2f7;
+}
+
+body.dark #backdrop {
+    background: #0b0b0f;
+    background: -webkit-linear-gradient(top, #16161d 0%, #101018 45%, #0b0b0f 100%);
+    background: linear-gradient(to bottom, #16161d 0%, #101018 45%, #0b0b0f 100%);
+}
+
+body.dark #nav .pill,
+body.dark #nav .theme-toggle {
+    background: rgba(255, 255, 255, 0.12);
+    color: #f2f2f7;
+}
+
+body.dark #nav .tab {
+    color: #d8d8e0;
+}
+
+body.dark #nav .tab.active {
+    background: #f2f2f7;
+    color: #000000;
+}
+
+body.dark #nav .avatar {
+    background: rgba(255, 255, 255, 0.18);
+    color: #f2f2f7;
+}
+
+body.dark .section-title {
+    color: #f2f2f7;
+}
+
+body.dark .section-sub {
+    color: #9a9aa8;
+}
+
+body.dark .card {
+    background: transparent;
+}
+
+body.dark .card .art,
+body.dark .card .art-fallback {
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.6);
+}
+
+body.dark .card:focus .art,
+body.dark .card:focus .art-fallback {
+    box-shadow: 0 0 0 5px #f2f2f7, 0 18px 44px rgba(0, 0, 0, 0.7);
+}
+
+body.dark .card .art-fallback {
+    background: #26262e;
+}
+
+body.dark .card .body {
+    color: #f2f2f7;
+}
+
+body.dark .card .card-sub {
+    color: #9a9aa8;
+}
+
+body.dark .card.playing .card-title {
+    color: #4cd964;
+}
+
+body.dark .track {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+body.dark .track:focus {
+    background: rgba(255, 255, 255, 0.22);
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.85), 0 10px 26px rgba(0, 0, 0, 0.6);
+}
+
+body.dark .track-num,
+body.dark .track-dur {
+    color: #9a9aa8;
+}
+
+body.dark .track-title {
+    color: #f2f2f7;
+}
+
+body.dark .track.playing .track-title {
+    color: #7ee787;
+}
+
+body.dark .detail-head .back {
+    background: rgba(255, 255, 255, 0.14);
+    color: #f2f2f7;
+}
+
+body.dark .detail-head h2 {
+    color: #f2f2f7;
+}
+
+body.dark .detail-head .sub {
+    color: #9a9aa8;
+}
+
+body.dark #screen-connect .panel {
+    background: rgba(28, 28, 34, 0.92);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
+}
+
+body.dark #screen-connect h1 {
+    color: #f2f2f7;
+}
+
+body.dark #screen-connect .hint,
+body.dark #connect-form label {
+    color: #9a9aa8;
+}
+
+body.dark #connect-form input {
+    background: #1c1c22;
+    color: #f2f2f7;
+    border-color: rgba(255, 255, 255, 0.18);
+}
+
+body.dark #transport {
+    background: rgba(28, 28, 34, 0.85);
+    border-top-color: rgba(255, 255, 255, 0.1);
+}
+
+body.dark #transport .np {
+    color: #f2f2f7;
+}
+
+body.dark #transport .np-art {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+body.dark #transport .np-art.empty:after {
+    color: rgba(255, 255, 255, 0.3);
+}
+
+body.dark #transport .np-artist,
+body.dark #transport .status,
+body.dark #transport .seek-time {
+    color: #9a9aa8;
+}
+
+body.dark #transport .seek-track {
+    background: rgba(255, 255, 255, 0.18);
+}
+
+body.dark #transport .controls button {
+    background: rgba(255, 255, 255, 0.16);
+    color: #f2f2f7;
+}
+
+body.dark #transport .controls button:focus {
+    background: #f2f2f7;
+    color: #000000;
+}
+
+body.dark .empty {
+    color: #9a9aa8;
+}
+
+body.dark .search-box {
+    background: rgba(255, 255, 255, 0.12);
+    color: #f2f2f7;
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
+}
+
+body.dark .key {
+    background: rgba(255, 255, 255, 0.14);
+    color: #f2f2f7;
+}
+
+body.dark .key:focus {
+    background: #f2f2f7;
+    color: #000000;
+}
+
+body.dark .result {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+body.dark .result:focus {
+    background: rgba(255, 255, 255, 0.22);
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.85), 0 10px 26px rgba(0, 0, 0, 0.6);
+}
+
+body.dark .result-art {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+body.dark .result-art.empty:after {
+    color: rgba(255, 255, 255, 0.3);
+}
+
+body.dark .result-title {
+    color: #f2f2f7;
+}
+
+body.dark .result-sub,
+body.dark .result-kind {
+    color: #9a9aa8;
+}
+
+body.dark .index-letter {
+    background: rgba(255, 255, 255, 0.14);
+    color: #f2f2f7;
+}
+
+body.dark .index-letter:focus {
+    background: #f2f2f7;
+    color: #000000;
+}
+
+body.dark .artist {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+body.dark .artist:focus {
+    background: rgba(255, 255, 255, 0.22);
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.85), 0 10px 26px rgba(0, 0, 0, 0.6);
+}
+
+body.dark .artist-art {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+body.dark .artist-art.empty:after {
+    color: rgba(255, 255, 255, 0.3);
+}
+
+body.dark .artist-name {
+    color: #f2f2f7;
+}
+
+body.dark .artist-sub,
+body.dark .artist-letter {
+    color: #9a9aa8;
+}

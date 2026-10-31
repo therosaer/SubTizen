@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>SubTizen</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="backdrop"></div>
+
+<!-- Navigation pill (hidden on the connect screen) -->
+<nav id="nav" class="hidden">
+    <div class="avatar" id="nav-avatar"></div>
+    <div class="pill">
+        <button class="tab active" id="tab-albums" data-tab="albums">Albums</button>
+        <button class="tab" id="tab-artists" data-tab="artists">Artists</button>
+        <button class="tab" id="tab-search" data-tab="search">Search</button>
+        <button class="tab" id="tab-now" data-tab="now">Now Playing</button>
+    </div>
+    <button class="tab theme-toggle" id="btn-theme" title="Toggle dark mode">Dark</button>
+</nav>
+
+<div id="app">
+
+    <!-- Connect -->
+    <section id="screen-connect" class="screen active">
+        <div class="panel">
+            <h1>SubTizen</h1>
+            <p class="hint">Connect to your Subsonic server</p>
+            <form id="connect-form">
+                <label for="server-url">Server URL</label>
+                <input type="text" id="server-url" placeholder="http://192.168.1.10:4533" autocomplete="off">
+                <label for="username">Username</label>
+                <input type="text" id="username" autocomplete="off">
+                <label for="password">Password</label>
+                <input type="password" id="password" autocomplete="off">
+
+                <button type="submit" id="btn-connect">Connect</button>
+            </form>
+        </div>
+    </section>
+
+    <!-- Home -->
+    <section id="screen-albums" class="screen">
+        <h2 class="section-title">Recently Played</h2>
+        <ul id="recent-list" class="grid"></ul>
+
+        <h2 class="section-title">Recently Added</h2>
+        <ul id="added-list" class="grid"></ul>
+
+        <h2 class="section-title">Top Picks</h2>
+        <ul id="top-list" class="grid"></ul>
+    </section>
+
+    <!-- Artists -->
+    <section id="screen-artists" class="screen">
+        <h2 class="section-title">Artists</h2>
+        <div id="artist-index" class="artist-index"></div>
+        <ul id="artist-list" class="artist-list"></ul>
+    </section>
+
+    <!-- Search -->
+    <section id="screen-search" class="screen">
+        <h2 class="section-title">Search</h2>
+        <div id="search-box" class="search-box">
+            <span id="search-query" class="search-query"></span>
+            <span id="search-caret" class="search-caret"></span>
+        </div>
+        <div id="keyboard" class="keyboard"></div>
+        <div id="search-results" class="results"></div>
+    </section>
+
+    <!-- Now Playing -->
+    <section id="screen-now" class="screen">
+        <div class="np-stage">
+            <div id="np-cover" class="np-cover empty"></div>
+            <div class="np-info">
+                <div id="np-lyrics" class="np-lyrics">
+                    <p class="np-line">Nothing playing</p>
+                </div>
+                <div class="np-meta">
+                    <span id="np-title" class="np-title"></span>
+                    <span id="np-artist" class="np-artist"></span>
+                    <span id="np-album" class="np-album"></span>
+                </div>
+            </div>
+            <div class="np-bar">
+                <div class="np-seek">
+                    <span id="np-elapsed" class="np-time">0:00</span>
+                    <div id="np-seek-track" class="np-seek-track">
+                        <div id="np-seek-fill" class="np-seek-fill"></div>
+                    </div>
+                    <span id="np-total" class="np-time">0:00</span>
+                </div>
+                <div class="np-actions">
+                    <button id="np-prev" aria-label="Previous">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M6 5h2.4v14H6z"/>
+                            <path d="M20 5v14L9.2 12z"/>
+                        </svg>
+                    </button>
+                    <button id="np-play" aria-label="Play">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M7 4.5v15L20 12z"/>
+                        </svg>
+                    </button>
+                    <button id="np-next" aria-label="Next">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M15.6 5H18v14h-2.4z"/>
+                            <path d="M4 5v14l10.8-7z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Artist detail -->
+    <section id="screen-artist" class="screen">
+        <header class="detail-head">
+            <button id="back-to-artists" class="back">&larr; Artists</button>
+            <h2 id="artist-title"></h2>
+            <span id="artist-count" class="sub"></span>
+        </header>
+        <ul id="artist-albums" class="grid"></ul>
+    </section>
+
+    <!-- Album detail -->
+    <section id="screen-album" class="screen">
+        <header class="detail-head">
+            <button id="back-to-albums" class="back">&larr; Albums</button>
+            <h2 id="album-title"></h2>
+            <span id="album-artist" class="sub"></span>
+        </header>
+        <ul id="song-list" class="tracklist"></ul>
+    </section>
+
+</div>
+
+<!-- Persistent transport bar -->
+<footer id="transport">
+    <div id="np-art" class="np-art empty"></div>
+    <div id="now-playing" class="np">Nothing playing</div>
+    <div class="controls">
+        <button id="btn-prev" aria-label="Previous">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 5h2.4v14H6z"/>
+                <path d="M20 5v14L9.2 12z"/>
+            </svg>
+        </button>
+        <button id="btn-play" aria-label="Play">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 4.5v15L20 12z"/>
+            </svg>
+        </button>
+        <button id="btn-next" aria-label="Next">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M15.6 5H18v14h-2.4z"/>
+                <path d="M4 5v14l10.8-7z"/>
+            </svg>
+        </button>
+    </div>
+    <div class="seek">
+        <span id="seek-elapsed" class="seek-time">0:00</span>
+        <div id="seek-track" class="seek-track">
+            <div id="seek-fill" class="seek-fill"></div>
+        </div>
+        <span id="seek-total" class="seek-time">0:00</span>
+    </div>
+    <div id="status" class="status"></div>
+    <audio id="audio" preload="none"></audio>
+</footer>
+
+<script src="lib/md5.js"></script>
+<script src="js/keys.js"></script>
+<script src="js/subsonic.js"></script>
+<script src="js/lyrics.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
