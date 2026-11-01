@@ -84,7 +84,7 @@ Produces `dist/SubTizen.wgt`. Uses the Tizen Studio packager if installed at
 plain `zip` — which is what a `.wgt` is, and is enough for sideloading in developer mode.
 
 ## Install on the TV
-
+### Manual
 Grab `SubTizen.wgt` from the [latest release](../../releases/latest), or build it
 yourself with `./tools/package.sh`.
 
@@ -97,6 +97,10 @@ yourself with `./tools/package.sh`.
    ```
 
 3. Launch **SubTizen** from the Apps screen.
+
+### Apps2Samsung
+Get the Apps2Samsung app and search for Subtizen
+https://github.com/Apps2Samsung/Apps2Samsung
 
 ## Remote control
 
