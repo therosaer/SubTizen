@@ -5,15 +5,18 @@
   The `id` and `tizen:application` ids below are valid for sideloading in
   developer mode. Signing for the Tizen store requires a certificate whose
   package id matches `tizen:application/@package`.
+
+  Tizen requires the package id to be exactly 10 alphanumeric characters, so
+  `package` is `SubTizen01` (the app id is `<package>.<app name>`).
 -->
 <widget xmlns="http://www.w3.org/ns/widgets"
         xmlns:tizen="http://tizen.org/ns/widgets"
         id="https://github.com/therosaer/SubTizen"
-        version="0.1.0"
+        version="1.0.1"
         viewmodes="maximized">
 
-    <tizen:application id="therosaer.SubTizen"
-                       package="therosaer"
+    <tizen:application id="SubTizen01.SubTizen"
+                       package="SubTizen01"
                        required_version="2.4"/>
 
     <content src="index.html"/>

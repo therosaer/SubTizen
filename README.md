@@ -9,6 +9,7 @@
 [![Tizen](https://img.shields.io/badge/Tizen-2.4-2596be?style=flat-square)](https://www.tizen.org/)
 [![Platform](https://img.shields.io/badge/platform-Samsung%20TV-1428a0?style=flat-square)](https://developer.samsung.com/tv)
 [![Status](https://img.shields.io/badge/status-working-brightgreen?style=flat-square)](#build)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 </div>
 
@@ -54,6 +55,13 @@ app/                 the web app (this is what gets packaged)
   res/icon.png       app icon
 tools/package.sh     builds dist/SubTizen.wgt
 ```
+
+## Package identity
+
+Tizen requires the package id to be **exactly 10 alphanumeric characters**, so
+`config.xml` uses `SubTizen01` as `tizen:application/@package` and
+`SubTizen01.SubTizen` as the application id. The widget `version` is bumped for each
+release; the current release is `1.0.1`.
 
 ## Build
 
@@ -136,3 +144,7 @@ on-screen overlay of the last keycodes received.
 
 Detailed engineering notes — UI internals, D-pad and scrolling behaviour, keycode
 diagnostics, and Tizen quirks — live in [HANDOVER.md](HANDOVER.md).
+
+## License
+
+[MIT](LICENSE) © 2026 therosaer.
