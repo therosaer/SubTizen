@@ -19,6 +19,16 @@ A 10-foot music client driven entirely by the remote control. Talks to any
 Subsonic-compatible server — Navidrome, Airsonic, Gonic, Subsonic — and renders an
 Apple Music–style interface with synced lyrics.
 
+## Screenshots
+
+| Home (dark) | Home (light) |
+|---|---|
+| ![Home screen in dark mode](docs/screenshots/home-dark.png) | ![Home screen in light mode](docs/screenshots/home-light.png) |
+
+| Artists | Search |
+|---|---|
+| ![Artists screen with A–Z letter strip](docs/screenshots/artists.png) | ![Search screen with on-screen keyboard](docs/screenshots/search.png) |
+
 ## Features
 
 - 🎵 **Plays your library** — streams from any Subsonic server, transcoding FLAC/Ogg to MP3
