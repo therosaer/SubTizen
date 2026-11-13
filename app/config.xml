@@ -12,7 +12,7 @@
 <widget xmlns="http://www.w3.org/ns/widgets"
         xmlns:tizen="http://tizen.org/ns/widgets"
         id="https://github.com/therosaer/SubTizen"
-        version="1.0.1"
+        version="1.1"
         viewmodes="maximized">
 
     <tizen:application id="SubTizen01.SubTizen"
@@ -39,6 +39,9 @@
       are never delivered to the page at all.
     -->
     <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
+
+    <!-- Samsung AVPlay (webapis.avplay): lets the AirPlay tab set the player's buffer size -->
+    <tizen:privilege name="http://developer.samsung.com/privilege/avplay"/>
 
     <tizen:setting screen-orientation="landscape"
                    context-menu="disable"

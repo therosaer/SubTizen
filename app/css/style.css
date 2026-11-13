@@ -43,7 +43,7 @@ html, body {
     top: 150px;
     left: 0;
     right: 0;
-    bottom: 190px;
+    bottom: 130px;
 }
 
 .screen {
@@ -132,6 +132,12 @@ html, body {
     line-height: 70px;
     text-align: center;
     text-transform: uppercase;
+    /* A button now: it opens the connection settings. */
+    padding: 0;
+    border: 0;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
 }
 
 #nav .theme-toggle {
@@ -164,7 +170,7 @@ html, body {
     font-size: 34px;
     font-weight: 700;
     color: #4d4f5d;
-    margin: 10px 0 22px;
+    margin: 26px 0 18px;
 }
 
 /*
@@ -233,6 +239,14 @@ html, body {
     white-space: nowrap;
     overflow-x: auto;
     overflow-y: hidden;
+    /*
+     * The row is a scroll container, so it clips whatever sticks out of its box. A focused
+     * card grows and lifts (and carries a focus ring), which used to be cut off flat along
+     * the top edge. Padding gives the card room; the matching negative margin keeps the
+     * row's position and spacing exactly as before. (JS: ROW_PAD in focusNode.)
+     */
+    padding: 44px 36px 52px;
+    margin: -44px -36px -52px;
     /* Hide the scrollbar; the row is driven by the D-pad, not a pointer. */
     -ms-overflow-style: none;
     scrollbar-width: none;
@@ -254,7 +268,8 @@ html, body {
     flex: 0 0 300px;
     margin: 0 26px 0 0;
     border-radius: 14px;
-    overflow: hidden;
+    /* Not `hidden`: that cut the focus ring off along the top and sides of the artwork. */
+    overflow: visible;
     background: transparent;
     cursor: pointer;
     outline: none;
@@ -266,8 +281,9 @@ html, body {
      * layout box fixed at 300px and confines the movement to the card itself.
      */
     position: relative;
-    -webkit-transition: -webkit-transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
-    transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    /* A touch of overshoot on the way in makes the focus feel springy rather than mechanical. */
+    -webkit-transition: -webkit-transform 320ms cubic-bezier(0.2, 0.9, 0.3, 1.18);
+    transition: transform 320ms cubic-bezier(0.2, 0.9, 0.3, 1.18);
 }
 
 /*
@@ -287,11 +303,15 @@ html, body {
     100% { transform: scale(1.06) translateY(0); }
 }
 
+/*
+ * One continuous transition replaces the old keyframe pop: the keyframes started at the
+ * full scale instantly, so a card jumped to its focused size instead of growing into it.
+ * z-index keeps the grown card (and its ring) above the next one.
+ */
 .card:focus {
-    -webkit-transform: scale(1.06);
-    transform: scale(1.06);
-    -webkit-animation: card-settle 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
-    animation: card-settle 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    -webkit-transform: translateY(-6px) scale(1.07);
+    transform: translateY(-6px) scale(1.07);
+    z-index: 2;
 }
 
 /*
@@ -309,9 +329,11 @@ html, body {
     height: 300px;
     border-radius: 12px;
     background: #2a2a2a;
+    background: -webkit-linear-gradient(top left, #3b3b4f, #262632);
+    background: linear-gradient(135deg, #3b3b4f, #262632);
     background-size: cover;
     background-position: center;
-    box-shadow: 0 10px 26px rgba(23, 38, 61, 0.28);
+    box-shadow: 0 6px 14px rgba(23, 38, 61, 0.26);
 }
 
 .card .art-fallback {
@@ -324,12 +346,12 @@ html, body {
     font-size: 96px;
     color: rgba(255, 255, 255, 0.35);
     background: #2a2a2a;
-    box-shadow: 0 10px 26px rgba(23, 38, 61, 0.28);
+    box-shadow: 0 6px 14px rgba(23, 38, 61, 0.26);
 }
 
 .card:focus .art,
 .card:focus .art-fallback {
-    box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.95), 0 16px 34px rgba(23, 38, 61, 0.4);
+    box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.95), 0 8px 18px rgba(23, 38, 61, 0.34);
 }
 
 /*
@@ -474,7 +496,8 @@ html, body {
  * backdrop. The gradient below is only the fallback for when nothing is
  * playing or the artwork cannot be sampled.
  */
-#screen-now {
+#screen-now,
+#screen-airplay {
     padding: 0;
     overflow: hidden;
     background: #2a1a3a;
@@ -482,7 +505,8 @@ html, body {
     background: linear-gradient(to bottom right, #3a1f4d 0%, #2a1a3a 55%, #1d1229 100%);
 }
 
-#screen-now .np-stage {
+#screen-now .np-stage,
+#screen-airplay .np-stage {
     position: absolute;
     top: 0;
     left: 0;
@@ -491,7 +515,8 @@ html, body {
     padding: 60px 80px 0;
 }
 
-#screen-now .np-cover {
+#screen-now .np-cover,
+#screen-airplay .np-cover {
     position: absolute;
     left: 80px;
     top: 60px;
@@ -504,7 +529,8 @@ html, body {
     box-shadow: 0 30px 70px rgba(0, 0, 0, 0.55);
 }
 
-#screen-now .np-cover.empty:after {
+#screen-now .np-cover.empty:after,
+#screen-airplay .np-cover.empty:after {
     content: '\266B';
     display: block;
     width: 100%;
@@ -515,7 +541,8 @@ html, body {
     color: rgba(255, 255, 255, 0.22);
 }
 
-#screen-now .np-info {
+#screen-now .np-info,
+#screen-airplay .np-info {
     position: absolute;
     left: 680px;
     right: 80px;
@@ -529,13 +556,18 @@ html, body {
  * the reference layout does. The window is clipped so a long lyric cannot
  * push the metadata off the screen.
  */
-#screen-now .np-lyrics {
+#screen-now .np-lyrics,
+#screen-airplay .np-lyrics {
     position: absolute;
     left: 0;
     right: 0;
     top: 50%;
     margin-top: -150px;
-    height: 300px;
+    /*
+     * Three lines (one above, the current one, one below). Any taller and the block runs into the
+     * song title and artist, which sit just below it.
+     */
+    height: 216px;
     overflow: hidden;
     font-size: 46px;
     font-weight: 700;
@@ -543,7 +575,8 @@ html, body {
     color: rgba(255, 255, 255, 0.28);
 }
 
-#screen-now .np-line {
+#screen-now .np-line,
+#screen-airplay .np-line {
     display: block;
     margin-bottom: 10px;
     white-space: nowrap;
@@ -553,15 +586,18 @@ html, body {
     transition: color 200ms linear;
 }
 
-#screen-now .np-line.current {
+#screen-now .np-line.current,
+#screen-airplay .np-line.current {
     color: #ffffff;
 }
 
-#screen-now .np-line.past {
+#screen-now .np-line.past,
+#screen-airplay .np-line.past {
     color: rgba(255, 255, 255, 0.16);
 }
 
-#screen-now .np-meta {
+#screen-now .np-meta,
+#screen-airplay .np-meta {
     position: absolute;
     left: 0;
     right: 0;
@@ -571,7 +607,8 @@ html, body {
     text-overflow: ellipsis;
 }
 
-#screen-now .np-title {
+#screen-now .np-title,
+#screen-airplay .np-title {
     display: block;
     font-size: 30px;
     font-weight: 600;
@@ -581,7 +618,9 @@ html, body {
 }
 
 #screen-now .np-artist,
-#screen-now .np-album {
+#screen-airplay .np-artist,
+#screen-now .np-album,
+#screen-airplay .np-album {
     display: block;
     margin-top: 4px;
     font-size: 24px;
@@ -596,7 +635,8 @@ html, body {
  * as a row: the seeker takes the width and the buttons sit at the right, so
  * the whole control cluster reads as one line under the artwork.
  */
-#screen-now .np-bar {
+#screen-now .np-bar,
+#screen-airplay .np-bar {
     position: absolute;
     left: 80px;
     right: 80px;
@@ -604,17 +644,19 @@ html, body {
     height: 110px;
 }
 
-#screen-now .np-seek {
+#screen-now .np-seek,
+#screen-airplay .np-seek {
     position: absolute;
     left: 0;
-    right: 400px;
+    right: 620px;
     top: 50%;
     margin-top: -13px;
     height: 26px;
     font-size: 0;
 }
 
-#screen-now .np-time {
+#screen-now .np-time,
+#screen-airplay .np-time {
     display: inline-block;
     vertical-align: middle;
     width: 80px;
@@ -622,37 +664,42 @@ html, body {
     color: rgba(255, 255, 255, 0.6);
 }
 
-#screen-now #np-total {
+#screen-now #np-total,
+#screen-airplay .np-time-end {
     text-align: right;
 }
 
-#screen-now .np-seek-track {
+#screen-now .np-seek-track,
+#screen-airplay .np-seek-track {
     display: inline-block;
     vertical-align: middle;
-    width: 1000px;
+    width: 960px;
     height: 8px;
     border-radius: 4px;
     background: rgba(255, 255, 255, 0.22);
     overflow: hidden;
 }
 
-#screen-now .np-seek-fill {
+#screen-now .np-seek-fill,
+#screen-airplay .np-seek-fill {
     width: 0;
     height: 8px;
     border-radius: 4px;
     background: #ffffff;
 }
 
-#screen-now .np-actions {
+#screen-now .np-actions,
+#screen-airplay .np-actions {
     position: absolute;
     right: 0;
     top: 0;
-    width: 380px;
+    width: 600px;
     height: 110px;
     text-align: right;
 }
 
-#screen-now .np-actions button {
+#screen-now .np-actions button,
+#screen-airplay .np-actions button {
     width: 90px;
     height: 90px;
     margin-left: 20px;
@@ -668,7 +715,8 @@ html, body {
     line-height: 0;
 }
 
-#screen-now .np-actions button svg {
+#screen-now .np-actions button svg,
+#screen-airplay .np-actions button svg {
     width: 40px;
     height: 40px;
     fill: currentColor;
@@ -677,7 +725,13 @@ html, body {
     pointer-events: none;
 }
 
-#screen-now .np-actions button:focus {
+/* Shuffle / repeat when switched on. */
+#screen-now .np-actions button.on {
+    background: rgba(255, 255, 255, 0.42);
+}
+
+#screen-now .np-actions button:focus,
+#screen-airplay .np-actions button:focus {
     background: #ffffff;
     color: #2a1a3a;
     box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.9), 0 10px 30px rgba(0, 0, 0, 0.45);
@@ -688,11 +742,15 @@ html, body {
  * and buttons are on the page itself — so it is hidden while Now Playing is
  * active. `#app` is stretched to the bottom edge to reclaim the space.
  */
-body.now-active #transport {
+body.now-active #transport,
+body.connect-active #transport,
+body.no-player #transport {
     display: none;
 }
 
-body.now-active #app {
+body.now-active #app,
+body.connect-active #app,
+body.no-player #app {
     bottom: 0;
 }
 
@@ -731,7 +789,7 @@ body.now-active #nav .avatar {
 #screen-connect .panel {
     width: 900px;
     margin: 0 auto;
-    padding: 50px 60px 60px;
+    padding: 36px 60px 40px;
     border-radius: 24px;
     background: rgba(255, 255, 255, 0.72);
     box-shadow: 0 24px 60px rgba(23, 38, 61, 0.25);
@@ -752,7 +810,7 @@ body.now-active #nav .avatar {
 
 #connect-form label {
     display: block;
-    margin: 26px 0 8px;
+    margin: 16px 0 6px;
     color: #777988;
     font-size: 20px;
     text-transform: uppercase;
@@ -778,8 +836,8 @@ body.now-active #nav .avatar {
 
 #btn-connect {
     width: 100%;
-    margin-top: 36px;
-    padding: 18px 32px;
+    margin-top: 26px;
+    padding: 16px 32px;
     border: 0;
     border-radius: 14px;
     background: #0a84ff;
@@ -796,6 +854,31 @@ body.now-active #nav .avatar {
     box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.95), 0 10px 30px rgba(10, 132, 255, 0.5);
 }
 
+#btn-cancel {
+    width: 100%;
+    margin-top: 12px;
+    padding: 14px 32px;
+    border: 0;
+    border-radius: 14px;
+    background: rgba(23, 38, 61, 0.12);
+    color: #17263d;
+    font-family: inherit;
+    font-size: 28px;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+}
+
+#btn-cancel:focus {
+    background: #ffffff;
+    box-shadow: 0 0 0 5px rgba(10, 132, 255, 0.6), 0 10px 30px rgba(23, 38, 61, 0.3);
+}
+
+body.dark #btn-cancel {
+    background: rgba(255, 255, 255, 0.14);
+    color: #f2f2f7;
+}
+
 /* ---------- Transport ---------- */
 
 #transport {
@@ -803,7 +886,7 @@ body.now-active #nav .avatar {
     left: 0;
     right: 0;
     bottom: 0;
-    height: 190px;
+    height: 130px;
     padding: 0 80px;
     background: rgba(255, 255, 255, 0.55);
     border-top: 1px solid rgba(255, 255, 255, 0.7);
@@ -816,9 +899,9 @@ body.now-active #nav .avatar {
 #transport .np-art {
     position: absolute;
     left: 80px;
-    top: 22px;
-    width: 96px;
-    height: 96px;
+    top: 14px;
+    width: 80px;
+    height: 80px;
     border-radius: 10px;
     background-color: rgba(23, 38, 61, 0.12);
     background-size: cover;
@@ -851,10 +934,10 @@ body.now-active #nav .avatar {
 
 #transport .np {
     position: absolute;
-    left: 196px;
-    top: 26px;
-    width: 520px;
-    font-size: 28px;
+    left: 180px;
+    top: 18px;
+    width: 560px;
+    font-size: 26px;
     font-weight: 600;
     color: #2b2d3a;
     white-space: nowrap;
@@ -864,26 +947,40 @@ body.now-active #nav .avatar {
 
 #transport .np-artist {
     display: block;
-    font-size: 22px;
+    font-size: 20px;
     font-weight: 400;
     color: #777988;
+}
+
+/* Marks the bar as showing an AirPlay cast rather than a Subsonic track. */
+#transport .np-tag {
+    display: inline-block;
+    margin-right: 12px;
+    padding: 1px 12px;
+    border-radius: 12px;
+    background: #0a84ff;
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    vertical-align: 2px;
 }
 
 #transport .controls {
     position: absolute;
     left: 50%;
-    top: 30px;
+    top: 16px;
     margin-left: -190px;
     width: 380px;
     text-align: center;
 }
 
 #transport .controls button {
-    width: 70px;
-    height: 70px;
+    width: 64px;
+    height: 64px;
     margin: 0 12px;
     border: 0;
-    border-radius: 35px;
+    border-radius: 32px;
     background: rgba(255, 255, 255, 0.85);
     color: #17263d;
     font-family: inherit;
@@ -901,12 +998,17 @@ body.now-active #nav .avatar {
  * boxes with a stray line through them.
  */
 #transport .controls button svg {
-    width: 34px;
-    height: 34px;
+    width: 30px;
+    height: 30px;
     fill: currentColor;
     display: block;
     margin: 0 auto;
     pointer-events: none;
+}
+
+/* Skip buttons do nothing while an AirPlay cast owns the bar (the phone controls it). */
+#transport .controls button.disabled {
+    opacity: 0.35;
 }
 
 #transport .controls button:focus {
@@ -914,22 +1016,45 @@ body.now-active #nav .avatar {
     box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.95), 0 8px 24px rgba(23, 38, 61, 0.35);
 }
 
-#transport .status {
-    position: absolute;
+/*
+ * Messages are a toast that fades after a few seconds, so the player bar does not
+ * carry a permanent line of status text. It sits above the bar, or near the bottom
+ * where the bar is hidden.
+ */
+#status {
+    position: fixed;
     right: 80px;
-    top: 52px;
-    width: 560px;
-    text-align: right;
-    font-size: 20px;
-    color: #777988;
+    bottom: 150px;
+    max-width: 1000px;
+    padding: 12px 24px;
+    border-radius: 14px;
+    background: rgba(23, 38, 61, 0.88);
+    color: #ffffff;
+    font-size: 22px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    opacity: 0;
+    -webkit-transition: opacity 250ms linear;
+    transition: opacity 250ms linear;
+    pointer-events: none;
+    z-index: 50;
 }
 
-#transport .status.error {
-    color: #c0392b;
+#status.show {
+    opacity: 1;
 }
+
+#status.error {
+    background: rgba(192, 57, 43, 0.95);
+}
+
+body.now-active #status,
+body.connect-active #status,
+body.no-player #status {
+    bottom: 40px;
+}
+
 
 /*
  * On-screen key diagnostic, shown by pressing 0 three times. It exists because
@@ -957,8 +1082,8 @@ body.now-active #nav .avatar {
     position: absolute;
     left: 80px;
     right: 80px;
-    bottom: 18px;
-    height: 26px;
+    bottom: 10px;
+    height: 24px;
     font-size: 0;
 }
 
@@ -966,7 +1091,7 @@ body.now-active #nav .avatar {
     display: inline-block;
     vertical-align: middle;
     width: 70px;
-    font-size: 20px;
+    font-size: 18px;
     color: #777988;
 }
 
@@ -1392,6 +1517,19 @@ body.dark #backdrop {
     background: linear-gradient(to bottom, #16161d 0%, #101018 45%, #0b0b0f 100%);
 }
 
+/*
+ * Now Playing and AirPlay paint their own purple, but the nav bar sits above
+ * `#app`, over this backdrop. Without a rule here the bar shows the lavender
+ * (or, in dark mode, near-black) page background above a purple screen. An
+ * album tint set from script (inline style) still wins over this default.
+ */
+body.now-active #backdrop,
+body.dark.now-active #backdrop {
+    background: #2a1a3a;
+    background: -webkit-linear-gradient(top left, #3a1f4d 0%, #2a1a3a 55%, #1d1229 100%);
+    background: linear-gradient(to bottom right, #3a1f4d 0%, #2a1a3a 55%, #1d1229 100%);
+}
+
 body.dark #nav .pill,
 body.dark #nav .theme-toggle {
     background: rgba(255, 255, 255, 0.12);
@@ -1523,7 +1661,6 @@ body.dark #transport .np-art.empty:after {
 }
 
 body.dark #transport .np-artist,
-body.dark #transport .status,
 body.dark #transport .seek-time {
     color: #9a9aa8;
 }
@@ -1648,4 +1785,490 @@ body.dark .playlist-name {
 body.dark .playlist-sub,
 body.dark .playlist-count {
     color: #9a9aa8;
+}
+
+
+/* A green dot on the AirPlay tab while a cast is active. */
+#nav .tab.casting:after {
+    content: '';
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    margin-left: 12px;
+    border-radius: 6px;
+    background: #34c759;
+    vertical-align: 2px;
+}
+
+
+/* ---------- Now Playing: Favorite and Up Next ---------- */
+
+#screen-now .np-extra {
+    position: absolute;
+    left: 80px;
+    top: 612px;
+}
+
+#screen-now .np-extra button {
+    height: 72px;
+    margin-right: 20px;
+    padding: 0 34px 0 28px;
+    border: 0;
+    border-radius: 36px;
+    background: rgba(255, 255, 255, 0.16);
+    color: #ffffff;
+    font-family: inherit;
+    font-size: 26px;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+    line-height: 72px;
+    vertical-align: top;
+}
+
+#screen-now .np-extra button svg {
+    width: 34px;
+    height: 34px;
+    fill: currentColor;
+    vertical-align: middle;
+    margin-right: 12px;
+    pointer-events: none;
+}
+
+#screen-now .np-extra button span {
+    vertical-align: middle;
+}
+
+#screen-now .np-extra button.on {
+    background: rgba(255, 255, 255, 0.28);
+}
+
+#screen-now #np-fav.on {
+    color: #ff6b8a;
+}
+
+#screen-now .np-extra button:focus {
+    background: #ffffff;
+    color: #2a1a3a;
+    box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.9), 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+#screen-now #np-fav.on:focus {
+    color: #e0245e;
+}
+
+/* The Up Next list replaces the lyrics and the track details while it is open. */
+#screen-now .np-queuepanel {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 200px;
+    overflow-y: auto;
+}
+
+#screen-now .np-queuepanel h3 {
+    margin: 0 0 14px;
+    font-size: 34px;
+    font-weight: 700;
+    color: #ffffff;
+}
+
+#screen-now .queue-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+#screen-now .queue-row {
+    height: 64px;
+    line-height: 64px;
+    padding: 0 22px;
+    border-radius: 12px;
+    color: rgba(255, 255, 255, 0.88);
+    font-size: 27px;
+    white-space: nowrap;
+    overflow: hidden;
+    outline: none;
+}
+
+#screen-now .queue-row .q-title {
+    display: inline-block;
+    max-width: 640px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: top;
+}
+
+#screen-now .queue-row .q-artist {
+    display: inline-block;
+    max-width: 400px;
+    margin-left: 18px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: top;
+    font-size: 23px;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+#screen-now .queue-row .q-dur {
+    float: right;
+    font-size: 23px;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+#screen-now .queue-row:focus {
+    background: #ffffff;
+    color: #2a1a3a;
+}
+
+#screen-now .queue-row:focus .q-artist,
+#screen-now .queue-row:focus .q-dur {
+    color: #5b4a6b;
+}
+
+#screen-now .queue-empty {
+    font-size: 27px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+#screen-now.queue-open .np-lyrics,
+#screen-now.queue-open .np-meta {
+    display: none;
+}
+
+
+/* ---------- Now Playing: Favorite and Up Next ---------- */
+
+#screen-now .np-extra {
+    position: absolute;
+    left: 80px;
+    top: 612px;
+}
+
+#screen-now .np-extra button {
+    height: 72px;
+    margin-right: 20px;
+    padding: 0 34px 0 28px;
+    border: 0;
+    border-radius: 36px;
+    background: rgba(255, 255, 255, 0.16);
+    color: #ffffff;
+    font-family: inherit;
+    font-size: 26px;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+    line-height: 72px;
+    vertical-align: top;
+}
+
+#screen-now .np-extra button svg {
+    width: 34px;
+    height: 34px;
+    fill: currentColor;
+    vertical-align: middle;
+    margin-right: 12px;
+    pointer-events: none;
+}
+
+#screen-now .np-extra button span {
+    vertical-align: middle;
+}
+
+#screen-now .np-extra button.on {
+    background: rgba(255, 255, 255, 0.28);
+}
+
+#screen-now #np-fav.on {
+    color: #ff6b8a;
+}
+
+#screen-now .np-extra button:focus {
+    background: #ffffff;
+    color: #2a1a3a;
+    box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.9), 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+#screen-now #np-fav.on:focus {
+    color: #e0245e;
+}
+
+/* The Up Next list replaces the lyrics and the track details while it is open. */
+#screen-now .np-queuepanel {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 200px;
+    overflow-y: auto;
+}
+
+#screen-now .np-queuepanel h3 {
+    margin: 0 0 14px;
+    font-size: 34px;
+    font-weight: 700;
+    color: #ffffff;
+}
+
+#screen-now .queue-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+#screen-now .queue-row {
+    height: 64px;
+    line-height: 64px;
+    padding: 0 22px;
+    border-radius: 12px;
+    color: rgba(255, 255, 255, 0.88);
+    font-size: 27px;
+    white-space: nowrap;
+    overflow: hidden;
+    outline: none;
+}
+
+#screen-now .queue-row .q-title {
+    display: inline-block;
+    max-width: 640px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: top;
+}
+
+#screen-now .queue-row .q-artist {
+    display: inline-block;
+    max-width: 400px;
+    margin-left: 18px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: top;
+    font-size: 23px;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+#screen-now .queue-row .q-dur {
+    float: right;
+    font-size: 23px;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+#screen-now .queue-row:focus {
+    background: #ffffff;
+    color: #2a1a3a;
+}
+
+#screen-now .queue-row:focus .q-artist,
+#screen-now .queue-row:focus .q-dur {
+    color: #5b4a6b;
+}
+
+#screen-now .queue-empty {
+    font-size: 27px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+#screen-now.queue-open .np-lyrics,
+#screen-now.queue-open .np-meta {
+    display: none;
+}
+
+
+/* ---------- Smoother focus while browsing ---------- */
+
+/*
+ * Rows, keys and tabs ease into and out of focus instead of switching instantly, and the
+ * list rows slide a little towards you while focused. Prefixed too, for Tizen 2.4's WebKit.
+ */
+.track, .artist, .playlist, .result, .key, .index-letter, #nav .tab, #btn-cancel {
+    -webkit-transition: background-color 180ms linear, color 180ms linear,
+        box-shadow 240ms ease, -webkit-transform 260ms cubic-bezier(0.2, 0.9, 0.3, 1.15);
+    transition: background-color 180ms linear, color 180ms linear,
+        box-shadow 240ms ease, transform 260ms cubic-bezier(0.2, 0.9, 0.3, 1.15);
+}
+
+.track:focus, .artist:focus, .playlist:focus, .result:focus {
+    -webkit-transform: translateX(10px);
+    transform: translateX(10px);
+}
+
+.key:focus, .index-letter:focus {
+    -webkit-transform: scale(1.08);
+    transform: scale(1.08);
+}
+
+
+/* ---------- Motion: art fade-in, entrances, Now Playing, album header ---------- */
+
+/*
+ * Cover art loads into a layer on top of a placeholder and fades in once it has arrived, instead
+ * of popping in half-drawn. The layer inherits the rounded corners of whatever holds it.
+ */
+.card .art, .artist-art, .playlist-art, .result-art {
+    position: relative;
+}
+
+.art-img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-radius: inherit;
+    background-size: cover;
+    background-position: center;
+    opacity: 0;
+    -webkit-transition: opacity 300ms ease;
+    transition: opacity 300ms ease;
+}
+
+.art-img.in {
+    opacity: 1;
+}
+
+/* A cover that changes (bar, Now Playing, album header) fades up once the new image is ready. */
+@-webkit-keyframes art-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes art-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.fresh {
+    -webkit-animation: art-fade 450ms ease;
+    animation: art-fade 450ms ease;
+}
+
+/* Cards and tracks rise in one after another when a row or list first appears. */
+@-webkit-keyframes enter-up {
+    from { opacity: 0; -webkit-transform: translateY(24px) scale(0.96); }
+    to   { opacity: 1; -webkit-transform: translateY(0) scale(1); }
+}
+@keyframes enter-up {
+    from { opacity: 0; transform: translateY(24px) scale(0.96); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.enter {
+    -webkit-animation: enter-up 480ms cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+    animation: enter-up 480ms cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+}
+
+/*
+ * Now Playing: the lyrics are one long column that glides up as the song moves on (the
+ * current line is anchored near the top), fading out at both edges; the current line is
+ * a little larger. The cover shrinks when playback pauses and swells back when it resumes.
+ */
+#screen-now .np-lyrics.has-track {
+    -webkit-mask-image: -webkit-linear-gradient(top, transparent 0%, #000 24%, #000 76%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, #000 24%, #000 76%, transparent 100%);
+}
+
+.np-lyrics-track {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    -webkit-transition: -webkit-transform 560ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    transition: transform 560ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+#screen-now .np-line {
+    -webkit-transition: color 300ms linear, -webkit-transform 420ms ease;
+    transition: color 300ms linear, transform 420ms ease;
+    -webkit-transform-origin: left center;
+    transform-origin: left center;
+}
+
+#screen-now .np-line.current {
+    -webkit-transform: scale(1.05);
+    transform: scale(1.05);
+}
+
+#screen-now .np-cover, #screen-airplay .np-cover {
+    -webkit-transition: -webkit-transform 600ms cubic-bezier(0.2, 0.9, 0.3, 1.15);
+    transition: transform 600ms cubic-bezier(0.2, 0.9, 0.3, 1.15);
+}
+
+#screen-now.paused .np-cover, #screen-airplay.paused .np-cover {
+    -webkit-transform: scale(0.9);
+    transform: scale(0.9);
+}
+
+/* Album header: the cover is where a tapped card's art lands (and returns from). */
+.album-head {
+    white-space: nowrap;
+    font-size: 0;
+}
+
+.album-cover {
+    display: inline-block;
+    vertical-align: top;
+    width: 170px;
+    height: 170px;
+    margin-right: 34px;
+    border-radius: 12px;
+    background: #2a2a2a;
+    background: -webkit-linear-gradient(top left, #3b3b4f, #262632);
+    background: linear-gradient(135deg, #3b3b4f, #262632);
+    background-size: cover;
+    background-position: center;
+    box-shadow: 0 10px 26px rgba(23, 38, 61, 0.28);
+}
+
+.album-cover.flying {
+    opacity: 0;
+}
+
+.album-text {
+    display: inline-block;
+    vertical-align: top;
+    padding-top: 34px;
+    max-width: 1400px;
+    white-space: normal;
+}
+
+.album-text h2 {
+    font-size: 44px;
+    font-weight: 700;
+    color: #2b2d3a;
+}
+
+/* The art that flies between a card and the album header. */
+.fly-art {
+    position: fixed;
+    z-index: 100;
+    background-size: cover;
+    background-position: center;
+    box-shadow: 0 10px 24px rgba(23, 38, 61, 0.35);
+    -webkit-transform-origin: 0 0;
+    transform-origin: 0 0;
+    -webkit-transition: -webkit-transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    pointer-events: none;
+}
+
+.art.flying-hidden {
+    visibility: hidden;
+}
+
+/* ---------- Lite mode: switched on automatically when the device cannot keep up ---------- */
+
+body.lite .enter {
+    -webkit-animation: none;
+    animation: none;
+}
+
+body.lite .card,
+body.lite .art-img,
+body.lite .fresh,
+body.lite #screen-now .np-cover,
+body.lite #screen-airplay .np-cover,
+body.lite .np-lyrics-track,
+body.lite #screen-now .np-line {
+    -webkit-transition: none;
+    transition: none;
+    -webkit-animation: none;
+    animation: none;
+}
+
+body.lite .art-img {
+    opacity: 1;
 }

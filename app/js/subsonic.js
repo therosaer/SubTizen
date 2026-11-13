@@ -1,9 +1,11 @@
 /*
  * subsonic.js - Subsonic REST API client for Tizen 2.4.
  *
- * Uses XMLHttpRequest (no fetch) and plaintext password auth (`p=`/`u=`),
- * which is the most broadly supported scheme across Subsonic-compatible
- * servers. See README for the security tradeoff and the token-auth upgrade.
+ * Uses XMLHttpRequest (no fetch). Requests authenticate with a salted token
+ * (`t=md5(password + salt)`, `s=salt`, API 1.13+), so the password itself never
+ * appears in a URL (server logs, proxies, on-screen errors). Servers that do not
+ * support tokens get the legacy plaintext `p=` instead; the app picks the mode
+ * (see connect() in app.js) and passes it in as `auth`.
  */
 (function (global) {
     'use strict';
@@ -11,10 +13,23 @@
     var API_VERSION = '1.16.1';
     var CLIENT_NAME = 'SubTizen';
 
-    function Subsonic(baseUrl, username, password) {
+    function randomSalt() {
+        var chars = '0123456789abcdef';
+        var salt = '';
+        var i;
+        for (i = 0; i < 12; i++) {
+            salt += chars.charAt(Math.floor(Math.random() * 16));
+        }
+        return salt;
+    }
+
+    function Subsonic(baseUrl, username, password, auth) {
         this.baseUrl = String(baseUrl || '').replace(/\/+$/, '');
         this.username = username || '';
         this.password = password || '';
+        this.auth = (auth === 'plain' || !global.md5) ? 'plain' : 'token';
+        this.salt = randomSalt();
+        this.token = this.auth === 'token' ? global.md5(this.password + this.salt) : '';
     }
 
     Subsonic.prototype.buildUrl = function (method, params) {
@@ -24,7 +39,12 @@
 
         params = params || {};
         params.u = this.username;
-        params.p = this.password;
+        if (this.auth === 'token') {
+            params.t = this.token;
+            params.s = this.salt;
+        } else {
+            params.p = this.password;
+        }
         params.v = API_VERSION;
         params.c = CLIENT_NAME;
         params.f = 'json';
@@ -40,21 +60,24 @@
     Subsonic.prototype.request = function (method, params, onSuccess, onError) {
         var xhr = new XMLHttpRequest();
         var url = this.buildUrl(method, params);
+        var base = this.baseUrl;     /* the URL carries credentials; never put it in a message */
 
         xhr.open('GET', url, true);
         xhr.timeout = 15000;
 
         xhr.onreadystatechange = function () {
-            var payload;
+            var payload, err;
             if (xhr.readyState !== 4) {
                 return;
             }
             if (xhr.status === 0) {
-                onError(new Error('Network unreachable (CORS or offline). URL: ' + url));
+                onError(new Error('Network unreachable (CORS or offline). Server: ' + base));
                 return;
             }
             if (xhr.status < 200 || xhr.status >= 300) {
-                onError(new Error('HTTP ' + xhr.status + ' from ' + method));
+                err = new Error('HTTP ' + xhr.status + ' from ' + method);
+                err.http = xhr.status;
+                onError(err);
                 return;
             }
             try {
@@ -63,9 +86,18 @@
                 onError(new Error('Invalid JSON from ' + method + ': ' + e.message));
                 return;
             }
-            if (payload['subsonic-response'] && payload['subsonic-response'].status === 'failed') {
-                onError(new Error(payload['subsonic-response'].error ?
-                    payload['subsonic-response'].error.message : 'Subsonic error'));
+            if (!payload || !payload['subsonic-response']) {
+                onError(new Error('Not a Subsonic response from ' + method));
+                return;
+            }
+            if (payload['subsonic-response'].status === 'failed') {
+                /* `api` marks a Subsonic-level refusal (bad login, unsupported auth), not a network fault. */
+                err = new Error(payload['subsonic-response'].error ?
+                    payload['subsonic-response'].error.message : 'Subsonic error');
+                err.api = true;
+                err.code = payload['subsonic-response'].error ?
+                    payload['subsonic-response'].error.code : 0;
+                onError(err);
                 return;
             }
             onSuccess(payload['subsonic-response']);
@@ -144,6 +176,28 @@
      */
     Subsonic.prototype.getPlaylist = function (id, onSuccess, onError) {
         this.request('getPlaylist', { id: id }, onSuccess, onError);
+    };
+
+    /*
+     * Tell the server a track is playing (submission=false) or has been played
+     * (submission=true). Navidrome uses this for play counts and its own
+     * Recently Played. Fire-and-forget: a failure must never disturb playback.
+     */
+    Subsonic.prototype.scrobble = function (id, submission, time) {
+        this.request('scrobble', {
+            id: id,
+            submission: submission ? 'true' : 'false',
+            time: time
+        }, function () {}, function () {});
+    };
+
+    /* Favorites: the starred songs, and star/unstar for one item. */
+    Subsonic.prototype.getStarred = function (onSuccess, onError) {
+        this.request('getStarred2', {}, onSuccess, onError);
+    };
+
+    Subsonic.prototype.star = function (id, on, onSuccess, onError) {
+        this.request(on ? 'star' : 'unstar', { id: id }, onSuccess, onError);
     };
 
     Subsonic.prototype.search3 = function (query, onSuccess, onError) {

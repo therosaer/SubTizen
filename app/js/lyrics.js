@@ -20,7 +20,7 @@
      * traffic. The header is not required, but sending it is polite and keeps
      * the app from being rate-limited as an anonymous caller.
      */
-    var CLIENT_HEADER = 'SubTizen/1.0 (https://github.com/subtizen)';
+    var CLIENT_HEADER = 'SubTizen/1.1 (https://github.com/therosaer/SubTizen)';
 
     function get(url, onSuccess, onError) {
         var xhr = new XMLHttpRequest();

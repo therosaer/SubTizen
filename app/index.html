@@ -6,19 +6,20 @@
     <title>SubTizen</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
-<body>
+<body class="no-player">
 
 <div id="backdrop"></div>
 
 <!-- Navigation pill (hidden on the connect screen) -->
 <nav id="nav" class="hidden">
-    <div class="avatar" id="nav-avatar"></div>
+    <button class="tab avatar" id="nav-avatar" aria-label="Connection settings"></button>
     <div class="pill">
         <button class="tab active" id="tab-albums" data-tab="albums">Albums</button>
         <button class="tab" id="tab-artists" data-tab="artists">Artists</button>
         <button class="tab" id="tab-playlists" data-tab="playlists">Playlists</button>
         <button class="tab" id="tab-search" data-tab="search">Search</button>
         <button class="tab" id="tab-now" data-tab="now">Now Playing</button>
+        <button class="tab" id="tab-airplay" data-tab="airplay">AirPlay</button>
     </div>
     <button class="tab theme-toggle" id="btn-theme" title="Toggle dark mode">Dark</button>
 </nav>
@@ -29,7 +30,7 @@
     <section id="screen-connect" class="screen active">
         <div class="panel">
             <h1>SubTizen</h1>
-            <p class="hint">Connect to your Subsonic server</p>
+            <p class="hint" id="connect-hint">Connect to your Subsonic server</p>
             <form id="connect-form">
                 <label for="server-url">Server URL</label>
                 <input type="text" id="server-url" placeholder="http://192.168.1.10:4533" autocomplete="off">
@@ -37,22 +38,30 @@
                 <input type="text" id="username" autocomplete="off">
                 <label for="password">Password</label>
                 <input type="password" id="password" autocomplete="off">
+                <label for="bridge-url">AirPlay bridge (optional)</label>
+                <input type="text" id="bridge-url" placeholder="http://192.168.1.10:5100 - blank = server host, port 5100" autocomplete="off">
 
                 <button type="submit" id="btn-connect">Connect</button>
+                <button type="button" id="btn-cancel" class="hidden">Cancel</button>
             </form>
         </div>
     </section>
 
     <!-- Home -->
     <section id="screen-albums" class="screen">
-        <h2 class="section-title">Recently Played</h2>
+        <h2 class="section-title" id="title-recent">Recently Played</h2>
         <ul id="recent-list" class="grid"></ul>
 
-        <h2 class="section-title">Recently Added</h2>
+        <h2 class="section-title" id="title-favorites">Favorites</h2>
+        <ul id="fav-list" class="grid"></ul>
+
+        <h2 class="section-title" id="title-added">Recently Added</h2>
         <ul id="added-list" class="grid"></ul>
 
-        <h2 class="section-title">Top Picks</h2>
+        <h2 class="section-title" id="title-top">Top Picks</h2>
         <ul id="top-list" class="grid"></ul>
+
+        <p id="home-empty" class="empty hidden">Nothing to show yet. Play something, or check the server.</p>
     </section>
 
     <!-- Artists -->
@@ -83,7 +92,23 @@
     <section id="screen-now" class="screen">
         <div class="np-stage">
             <div id="np-cover" class="np-cover empty"></div>
+            <div class="np-extra">
+                <button id="np-fav" aria-label="Favorite">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path id="np-fav-path" d=""/></svg>
+                    <span id="np-fav-label">Favorite</span>
+                </button>
+                <button id="np-queue" aria-label="Up Next">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.2c-.3-.1-.6-.2-1-.2-1.700 0-3 1.300-3 3s1.300 3 3 3 3-1.300 3-3V8h3V6h-5z"/>
+                    </svg>
+                    <span>Up Next</span>
+                </button>
+            </div>
             <div class="np-info">
+                <div id="np-queuepanel" class="np-queuepanel hidden">
+                    <h3>Up Next</h3>
+                    <ul id="queue-list" class="queue-list"></ul>
+                </div>
                 <div id="np-lyrics" class="np-lyrics">
                     <p class="np-line">Nothing playing</p>
                 </div>
@@ -102,6 +127,11 @@
                     <span id="np-total" class="np-time">0:00</span>
                 </div>
                 <div class="np-actions">
+                    <button id="np-shuffle" aria-label="Shuffle off">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M10.6 9.2L5.4 4 4 5.4l5.2 5.2 1.4-1.4zM14.5 4l2 2L4 18.6 5.4 20 18 7.5l2 2V4h-5.5zm.3 9.4l-1.4 1.4 3.1 3.1-2 2H20v-5.5l-2 2-3.2-3z"/>
+                        </svg>
+                    </button>
                     <button id="np-prev" aria-label="Previous">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M6 5h2.4v14H6z"/>
@@ -117,6 +147,46 @@
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M15.6 5H18v14h-2.4z"/>
                             <path d="M4 5v14l10.8-7z"/>
+                        </svg>
+                    </button>
+                    <button id="np-repeat" aria-label="Repeat off">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- AirPlay receiver (audio comes from the SubTizen bridge) -->
+    <section id="screen-airplay" class="screen">
+        <div class="np-stage">
+            <div id="ap-cover" class="np-cover empty"></div>
+            <div class="np-info">
+                <div class="np-lyrics">
+                    <p id="ap-headline" class="np-line current">AirPlay</p>
+                    <p id="ap-hint" class="np-line"></p>
+                </div>
+                <div class="np-meta">
+                    <span id="ap-title" class="np-title"></span>
+                    <span id="ap-artist" class="np-artist"></span>
+                    <span id="ap-album" class="np-album"></span>
+                </div>
+            </div>
+            <div class="np-bar">
+                <div class="np-seek">
+                    <span id="ap-elapsed" class="np-time">0:00</span>
+                    <div class="np-seek-track">
+                        <div id="ap-seek-fill" class="np-seek-fill"></div>
+                    </div>
+                    <span id="ap-total" class="np-time np-time-end">0:00</span>
+                </div>
+                <div class="np-actions">
+                    <button id="ap-play" aria-label="Pause">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M6.5 4h4v16h-4z"/>
+                            <path d="M13.5 4h4v16h-4z"/>
                         </svg>
                     </button>
                 </div>
@@ -148,13 +218,20 @@
     <section id="screen-album" class="screen">
         <header class="detail-head">
             <button id="back-to-albums" class="back">&larr; Albums</button>
-            <h2 id="album-title"></h2>
-            <span id="album-artist" class="sub"></span>
+            <div class="album-head">
+                <div id="album-cover" class="album-cover"></div><div class="album-text">
+                    <h2 id="album-title"></h2>
+                    <span id="album-artist" class="sub"></span>
+                </div>
+            </div>
         </header>
         <ul id="song-list" class="tracklist"></ul>
     </section>
 
 </div>
+
+<!-- Short-lived messages (errors, "Loading ..."); not part of the player bar -->
+<div id="status" class="status"></div>
 
 <!-- Persistent transport bar -->
 <footer id="transport">
@@ -186,14 +263,16 @@
         </div>
         <span id="seek-total" class="seek-time">0:00</span>
     </div>
-    <div id="status" class="status"></div>
     <audio id="audio" preload="none"></audio>
+    <audio id="audio-airplay" preload="none"></audio>
 </footer>
 
+<script src="$WEBAPIS/webapis/webapis.js"></script>
 <script src="lib/md5.js"></script>
 <script src="js/keys.js"></script>
 <script src="js/subsonic.js"></script>
 <script src="js/lyrics.js"></script>
+<script src="js/airplay.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

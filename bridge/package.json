@@ -1,0 +1,15 @@
+{
+  "name": "subtizen-bridge",
+  "version": "1.1.0",
+  "description": "AirPlay receiver bridge for the SubTizen Samsung TV app",
+  "private": true,
+  "license": "MIT",
+  "main": "subtizen-bridge.js",
+  "bin": { "subtizen-bridge": "subtizen-bridge.js" },
+  "scripts": {
+    "start": "node subtizen-bridge.js",
+    "demo": "node subtizen-bridge.js --demo",
+    "test": "node test.js"
+  },
+  "engines": { "node": ">=16" }
+}

@@ -34,16 +34,26 @@ so its pool is fetched once and paged client-side.
 **Card bodies.** The text block under the artwork is transparent, so no tinted band shows
 between the cover art and the title. The artwork itself carries the drop shadow.
 
-**Focus.** The focused card scales up 6% and its artwork gains a white ring plus a soft
-shadow, which stays legible on the light background. Focused cards are scrolled into view,
-since Tizen's WebKit does not do this reliably.
+**Focus.** The focused card grows 7% and lifts 6 px, and its artwork gains a white ring plus a soft
+shadow, which stays legible on the light background. This is one CSS transition with a little overshoot
+(`.card`), not keyframes: the old keyframe "settle" started at the full scale instantly, so a card popped
+instead of growing. `z-index: 2` keeps the grown card above its neighbour.
 
-**Navigation animation.** Moving left/right plays a short lift-and-settle animation on the
-newly focused card, and moving up/down slides the row being entered in from the direction of
-travel. Both are CSS keyframes replayed from JS by removing the class, forcing a reflow, and
-re-adding it, because the browser otherwise coalesces the change and the animation never
-restarts. The animations are declared with both `-webkit-` and unprefixed properties, since
-Tizen 2.4's WebKit only understands the prefixed forms.
+**Room for the focused card.** A row (`.grid`) is a horizontal scroll container, so it clips whatever leaves
+its box. It carries `padding: 44px 36px 52px` with the matching negative margin (layout unchanged), and
+`.card` is `overflow: visible`, so the lifted card and its ring are never cut off (that clipping was the flat
+top edge). `ROW_PAD` in `focusNode` mirrors the 36 px side padding.
+
+**Scrolling.** `focusNode` no longer jumps: `animateScroll()` glides a row's `scrollLeft` and the screen's
+`scrollTop` to the target in 280 ms (ease-out), retargeting if a new focus arrives mid-glide and leaving a
+running glide alone when a press needs no scroll. It uses timers, not `requestAnimationFrame` (frames pause
+in a hidden page and can be throttled on a TV), and a safety timer always lands the scroll exactly on target.
+
+**Navigation animation.** Moving up/down slides the row being entered in from the direction of travel
+(`.grid.row-in-*`, a CSS keyframe replayed from JS by removing the class, forcing a reflow, and re-adding it).
+List rows (tracks, artists, playlists, results) ease their background and ring and slide 10 px towards you
+while focused; keys and A-Z letters scale 8%. The animations are declared with both `-webkit-` and
+unprefixed properties, since Tizen 2.4's WebKit only understands the prefixed forms.
 
 ## Artists
 
@@ -54,6 +64,9 @@ that always sorts last so the list order matches the A–Z strip above it. The s
 button per letter actually present, and selecting one jumps to the first artist under it.
 Enter on an artist loads their albums via `getArtist` and shows them as a card row; Enter on
 a card opens the album, and Back returns to the artist rather than to Home.
+
+Accented letters sort and group with their base letter (`stripAccents`: `String.normalize` where the engine has it, plus
+a Latin table for older ones), so "Álvaro" is under A and "Ñengo Flow" under N; non-Latin names still go to `#`.
 
 ## Playlists
 
@@ -286,7 +299,7 @@ Three details make the hand-rolled scroll work, and all three are easy to regres
   `offsetParent` silently returns `null` and skips the whole scroll block.
 - **The scroll target is computed from the card's index and layout width**, not from
   `getBoundingClientRect()`. The painted box has already been shifted by the browser's scroll
-  and is scaled 6% while focused, so geometry-based maths overshoots. Index arithmetic is
+  and is scaled while focused, so geometry-based maths overshoots. Index arithmetic is
   immune to both. The step is `cardWidth + 26`, matching `.card { margin: 0 26px 0 0 }`.
 - **The correction is deferred with `setTimeout(..., 0)`.** The browser performs its own
   scroll-into-view *after* `focusNode()` returns, and it is not observable through the
@@ -322,3 +335,208 @@ Tizen web apps are subject to CORS. Navidrome sends permissive headers, so direc
 Servers that do not send `Access-Control-Allow-Origin` will fail with a `Network unreachable`
 status. Workarounds are a reverse proxy that adds the header, or running the app against a
 server configured to allow the TV's origin.
+
+## AirPlay
+
+Tizen 2.4 web apps cannot advertise Bonjour services, listen on sockets or decode AirPlay audio, so
+receiving is done by `bridge/` (shairport-sync -> ffmpeg -> HTTP; see `bridge/README.md`) and the app is
+only a client of it.
+
+### Client (`js/airplay.js`, AirPlay parts of `js/app.js`)
+
+- **Polling.** `airplay.js` polls `GET <bridge>/status` every 2 s and reports `begin` (idle -> live), `end`
+  and `update` to `app.js`.
+- **Session rules.** A new cast (`idle -> playing/paused`) pauses the Subsonic audio, selects the AirPlay tab
+  and attaches the stream. When a Subsonic track plays, `AirPlay.release()` detaches the stream and sets
+  `suppressed`, so the cast does not grab the audio back. `suppressed` clears on `idle`, or when the phone has
+  been paused for 4 s or more and then plays again (`RESUME_TAKEOVER_MS`; the bridge stays live while paused, so
+  idle alone would leave the TV silent). A shorter gap, such as a track change, does not take over. The remote's
+  play/pause (`AirPlay.toggle()`) mutes/unmutes the stream only; transport belongs to the phone.
+- **Bridge address.** Optional field on the connect screen, stored in `subtizen.connection.bridge`. Blank
+  means `http://<subsonic host>:5100`.
+- **Screen.** `#screen-airplay` reuses the Now Playing stage CSS (selectors are doubled `#screen-now,
+  #screen-airplay`) and `body.now-active` applies to both. `applyNowTint(tint, screenId)` paints one of
+  them; the cover is loaded with `crossOrigin='anonymous'` so the canvas can read it (the bridge sends CORS
+  headers). `body.now-active #backdrop` paints the default purple behind the nav bar so it matches the
+  screen when no tint is applied.
+- **`loadHome(true)`** after connecting does not steal the screen if a cast already switched to AirPlay
+  while the library was loading.
+
+### Connection settings
+
+The nav avatar is a button that reopens the connect form, pre-filled and relabelled Save / Cancel
+(`openSettings`, `closeSettings`, `submitConnection`). Back also leaves it. If only the AirPlay bridge
+address changed it is saved and applied without logging in again (a down Subsonic server cannot block fixing
+the bridge) and the app lands on the AirPlay tab; if the server or credentials changed it reconnects and
+stays on the form until the server answers. `body.connect-active` hides the transport bar so the form fits
+at 1080p.
+
+### Players
+
+`airplay.js` tries three players in order and remembers a failure:
+
+1. **Web Audio** (`/stream.wav`: a 44-byte header, then raw s16le stereo 44.1 kHz). Read with `fetch()` streams,
+   or XHR in `x-user-defined` text mode on older WebKit (reconnecting every 6 MB to bound memory), and
+   scheduled on an `AudioContext` with a 0.35 s jitter buffer. Verified in a desktop browser only; the 2016
+   TV does not use it (it was not available or failed there).
+2. **Samsung AVPlay** (`webapis.avplay`, `/stream.mp3`). Needs `$WEBAPIS/webapis/webapis.js` in `index.html` and
+   the `http://developer.samsung.com/privilege/avplay` privilege in `config.xml`. This is what the TV uses.
+3. **The `<audio>` element** (`/stream.mp3`). Works, but the TV buffers about 20 s.
+
+The AirPlay screen names the player in use; when it falls back to the standard one it lists what was
+available and why, e.g. `Standard player (webaudio no, avplay failed: ...)`.
+
+### Delay (measured on a UE32K5502, Tizen 2.4)
+
+The bridge hands audio to the TV within a fraction of a second, so the delay is the TV player's own
+buffering. The bridge sends tuning in `/status` (`tv: { bufferUnit, bufferAmount, format }` from
+`--tv-buffer` / `--tv-format`) and `avApplyBuffer()` applies it, so experiments need no app reinstall.
+Results with AVPlay:
+
+| Setting | Delay |
+|---|---|
+| mp3, 1 s buffer (default) | about 3-4 s (best) |
+| wav, 1 s buffer | about 4 s (no gain) |
+| mp3, 500 ms buffer | worse |
+| mp3, 16 KB buffer | about 15 s (much worse; the TV reads the byte unit differently) |
+
+So the defaults are the best known setting. If the TV refuses a buffer value, the app falls back to 1 s (a byte
+amount is never reused as seconds) and the AirPlay screen says so.
+
+### Bridge state (`bridge/metadata.js`)
+
+- A pause is not a disconnect: `pend` only ends the play session. The state goes `idle` only after `ssnc/disc`
+  (observed on a real iPhone), plus a 2 s grace that ignores a `disc` right after a `conn`, or after 30 min of
+  silence as a safety net for a lost `disc`.
+- The position clock is the PCM actually received since the last `prgr` message, so it freezes while paused and
+  resumes by itself.
+- The sender delivers artwork (`PICT`) a few milliseconds *before* the track tags, and `prgr` can also arrive
+  before the tags, so a bundle keeps recent art and does not zero duration/position on a title change.
+- `pbeg` keeps the client name, and the cover URL version only ever increases so the TV never reuses a stale
+  cover.
+- No remote control: the phone sends no DACP information to an AirPlay 2 receiver, so the TV cannot pause or skip
+  the phone.
+- Two AirPlay 2 receivers on one computer share a device ID unless one is offset, which makes a phone connect
+  and show metadata but deliver no audio; the bridge sets `airplay_device_id_offset` (default 7).
+- Covered by `node bridge/test.js`.
+
+### Tested
+
+On a real iPhone and TV: casting, artwork, title, progress, pause and resume (seeker holds), disconnect back to
+"Ready for AirPlay", and the settings screen. In a desktop browser: the AVPlay call sequence (against a stub),
+the Web Audio path, and layout at 1920x1080.
+
+## Authentication, scrobbling and play modes
+
+- **Auth.** `Subsonic(baseUrl, user, pass, auth)` sends `t`/`s` (token, salt per client instance) by default, or `p` when
+  `auth === 'plain'`. `connect()` tries token first; a Subsonic-level refusal (`err.api`, e.g. code 41 or 40) retries once
+  with plain, and a plain success stores `auth: 'plain'` in `subtizen.connection` so the next launch starts there. Network
+  errors are not retried. Error messages never contain the request URL (it carries credentials).
+- **Scrobbling.** `playIndex()` sends `scrobble?submission=false` (now playing); `updateSeeker()` accumulates real play time
+  (`trackPlayTime`, which ignores seeks and pauses) and sends `submission=true` once at half the track (10 s to 240 s). It is
+  fire-and-forget and never affects playback. AirPlay is not scrobbled.
+- **Failed tracks.** The audio `error` handler calls `skipAfterError()`: it moves on after 1.5 s, and gives up after
+  `MAX_FAIL_STREAK` (4) failures in a row so a dead server does not cycle through the album.
+- **Shuffle / repeat.** `state.shuffle`, `state.repeat` (`off|all|one`) persist in `subtizen.playmode`. Shuffle keeps a
+  permutation (`state.order`, `orderPos`) built from the track you picked; Next/Prev walk it, and at the end repeat-all
+  reshuffles without repeating the same track back to back. `nextTrack(auto)`: repeat-one only replays when the track ended
+  by itself (`playNext(true)`), because button handlers pass the click event, so only a literal `true` counts. The two
+  buttons are `#np-shuffle` / `#np-repeat` in `.np-actions`; the Now Playing buttons have ids, not classes, so key handling
+  uses `isNowAction()`, and Back from them goes to the nav bar.
+- **Albums tab** only refetches the library if it was never loaded or is older than 10 minutes (`HOME_REFRESH_MS`).
+
+## Nav bar keys
+
+Focus on the nav bar is handled once, at the top of the global keydown handler (`isNavControl`): Left/Right move along the
+bar (`moveNav`), Up stays, Enter clicks. Before this, every screen's own navigation (the search keyboard, the A-Z strip, ...) also
+received those keys while a tab was focused and pulled focus back into the content, so from Search or Artists the bar could not
+be walked. `focusNav()` lands on the tab of the current screen, not always the first. On Artists, Up from the A-Z strip and Back
+from the strip reach the nav bar. Down from the bar and Back from the bar are still decided by each screen.
+
+## Player bar, toast, favorites and Up Next
+
+- **Tint.** The album tint is remembered in `state.nowTint` and painted only when Now Playing is shown (`show()`); it used to be
+  painted the moment it was computed, so starting a track from an album or search screen recoloured the whole app. The AirPlay
+  tint works the same way (`airplayTint`).
+- **Player bar.** `renderBar()` is the one place that decides what the bar shows: the Subsonic track, or an AirPlay cast
+  (`airplaySourceActive()`: bridge live and not displaced by a Subsonic track) with an `AirPlay` tag, dimmed skip buttons and the
+  cast's progress. It also toggles `body.no-player`, which hides the bar and gives its space back until something has played or is
+  being cast, and puts a green dot (`.casting`) on the AirPlay tab. It runs on every AirPlay update, once a second, and from
+  `playIndex()`. Starting a Subsonic track calls `AirPlay.release()` first so the bar never flashes the cast. `playNext`/`playPrev`
+  ignore button presses while a cast owns the bar.
+- **Toast.** `#status` is a fixed toast (outside the bar) that fades after 3.5 s, or 8 s for errors. Routine messages
+  (`QUIET_STATUS`: Playing., Library loaded., counts, Connected) are not shown.
+- **Home.** `updateHomeVisibility()` hides a row and its heading while it has no items (and shows one message if all are empty).
+  `neighbourGrid()` skips such rows when moving Up/Down, instead of treating the first empty row as the end of the page (Down from
+  the nav bar did nothing when Recently Played was empty). A server without `getStarred2` does not fail the home load.
+- **Favorites.** `Subsonic.star(id, on)` / `getStarred()` (`star`, `unstar`, `getStarred2`). The heart on Now Playing flips at once and
+  rolls back with an error toast on failure; success rebuilds the Favorites row (`refreshFavorites`). Song objects carry a `starred`
+  date when starred, which is what the heart reads.
+- **Up Next.** `upNext()` returns what will play after the current track: the shuffled order when shuffle is on (so it matches what Next
+  really plays), otherwise the rest of the queue, plus the start again for repeat-all. The panel replaces the lyrics and track details
+  (`#screen-now.queue-open`). Keys: Up from the transport buttons reaches Favorite/Up Next, Enter on Up Next opens the list and focuses it,
+  Up/Down walk it, Enter plays a row, Back closes it.
+
+## Motion
+
+- **Art fade-in.** Card, artist, playlist and result art is a child `.art-img` layer inside a placeholder; `fadeInArt()` loads each
+  image with `new Image()` and adds `.in` (an opacity transition) once it has arrived. Covers that change (player bar, Now Playing,
+  AirPlay) go through `setCoverImage()`, which keeps the old cover until the new one is loaded and then replays the `.fresh` fade; stale
+  loads are ignored.
+- **Entrance.** `enterAttrs(n)` gives the first 10 items of a row or track list an `.enter` class with a 45 ms-per-item inline delay
+  (`enter-up`, `backwards` fill so they wait invisible). A row animates the first time it renders, not on later rebuilds.
+- **Plain background on browse screens.** An experiment that tinted the page with the focused album's colour was removed: the browse
+  screens (Albums, Artists, Playlists, Search) keep the plain grey-lavender backdrop. Only Now Playing and AirPlay tint, from the
+  playing cover (`applyNowTint`).
+- **Card to album.** `openAlbum(album, returnTo, sourceCard)` measures the card's art, builds the album page, and `flyArt()` moves a copy
+  of the art (a transform, not layout) onto `#album-cover`. `leaveAlbum()` reverses it onto the card's *focused* size (7% bigger, 6 px up,
+  measured before focus) and focuses that card again; if the card is off screen it is a plain return. Search results and song cards open
+  without the flight.
+- **Now Playing.** Lyrics are built once per song as one column (`.np-lyrics-track`); a new line only restyles lines and changes the
+  column's `translateY` so the current line sits one line from the top, which the CSS transition glides (edges fade with a mask). The
+  cover shrinks while paused (`#screen-now.paused`, `#screen-airplay.paused`) and swells on play.
+- Test note: in a hidden or unfocused browser pane CSS transitions do not advance, so `getComputedStyle` shows start values; click into
+  the page (or take a screenshot) before measuring.
+
+## Row memory
+
+Moving Up/Down between home rows returns to the card you last had in the target row (`state.rowMemory`, filled by `rememberRowPosition`
+in `focusNode`, read by `neighbourGrid`). Before, focus went to the same *column* of the next row, so browsing a few cards in one row,
+going to another and coming back lost your place. A row you have not visited yet still opens at the matching column.
+
+## Performance on a 2016 TV
+
+Animation that is free on a desktop is not on this hardware, so motion is kept to what is cheap and the rest backs off by itself:
+
+- **Cheap only.** Focus is a `transform` transition on one card, a static white ring (no `box-shadow` transition: it repaints every frame),
+  and no `will-change` (that put a GPU layer on every card). List rows, keys and tabs have no transitions. The Now Playing cover only
+  scales. The lyric glide is one `transform` on one element, which is why it stays smooth.
+- **Scrolling backs off.** `animateScroll()` times its own steps; if three of the first four arrive more than 45 ms late it sets
+  `subtizen.smoothscroll = off`, stops gliding and scrolls instantly from then on (also on later launches). Delete that key to try again.
+- **No redundant DOM writes.** The player bar redraws every second, so it only touches the page when something changed: body and tab
+  classes, play/pause SVGs (`state.playIcon`), seeker text and width (`setTextIf` / `setWidthIf`, rounded to 0.2%), lyric line classes,
+  and the AirPlay screen (`state.apSig`). Anything that resets those values must go through the same helpers (`resetSeekerDisplay`).
+- **Lyrics block** is three lines (216 px). Taller, it runs into the song title and artist just below it.
+
+### Row paging and moving between rows (second pass)
+
+- **Paging.** Pages are 12 items (`PAGE_SIZE`) and the next page is requested when focus is `PREFETCH_AHEAD` (6) cards from the end of
+  a row, not at the last card, so it is usually there before you arrive. A page is appended 4 cards at a time, 40 ms apart
+  (`appendCards`, with a per-list token so a rebuild stops stale chunks); the first render is inserted at once.
+- **Covers.** Card art is requested at 300 px (`CARD_ART_SIZE`, was 600: four times the pixels to decode for a 300 px card on a 1080p
+  screen) and loaded through a queue of 3 (`pumpArt`) so decoding is spread over frames. Appended cards do not animate in.
+- **Between rows.** The row slide (`animateRow`, opacity + transform on a container holding every card) is gone, the screen's vertical
+  scroll jumps (only a row's horizontal scroll glides) and shadows are small (`0 6px 14px`).
+- **Lite mode.** Evidence of a slow device (the scroll glide arriving late, or two page renders over 150 ms) calls `enableLite()`: it
+  stores `subtizen.lite = on`, adds `body.lite` and turns off the glide, the art fades, entrance animations and the album
+  flight (CSS `body.lite ...` plus checks in `openAlbum`, `leaveAlbum`). To bring the motion back:
+  `localStorage.removeItem('subtizen.lite'); localStorage.removeItem('subtizen.smoothscroll')` and reload.
+
+### List scrolling
+
+`focusNode` keeps the focused element in view with `revealInScreen()`, which measures where the element actually is (after any scrolling the
+browser did itself) and adjusts only if it is within 20 px of an edge; it runs again on the next tick for engines that scroll after focus. It
+is idempotent, so the list is never pushed one way by the app and pulled back by the browser (that showed as a back-and-forth stutter when
+walking down tracks or artists). Moving between rows in the album, playlist and artist lists goes straight to the neighbouring element
+(`neighbourRow`) instead of scanning every row (an artist list can be hundreds long).
+

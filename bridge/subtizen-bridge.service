@@ -1,0 +1,14 @@
+# Copy to ~/.config/systemd/user/ (edit the path), then:
+#   systemctl --user daemon-reload && systemctl --user enable --now subtizen-bridge
+[Unit]
+Description=SubTizen AirPlay bridge
+After=network-online.target avahi-daemon.service
+
+[Service]
+# Add --airplay-port 7001 if another AirPlay receiver already uses port 7000.
+ExecStart=/usr/bin/node %h/SubTizen/bridge/subtizen-bridge.js --name SubTizen
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -11,12 +11,15 @@
 
     var STORAGE_KEY = 'subtizen.connection';
     var HISTORY_KEY = 'subtizen.history';
+    var PLAYMODE_KEY = 'subtizen.playmode';
+    var HOME_REFRESH_MS = 10 * 60 * 1000;
+    var MAX_FAIL_STREAK = 4;
     /*
      * Cards render at 300 CSS px. Requesting 132 px (the old vertical-list
      * size) made the artwork visibly pixelated once the layout grew, so ask
      * for 2x to stay sharp on high-density panels.
      */
-    var CARD_ART_SIZE = 600;
+    var CARD_ART_SIZE = 300;
 
     /* Transport-bar art renders at 96 CSS px; request 2x for sharpness. */
     var NP_ART_SIZE = 192;
@@ -27,12 +30,26 @@
         songs: [],
         currentIndex: -1,
         currentSong: null,
+        shuffle: false,
+        repeat: 'off',              /* off | all | one */
+        order: [],                  /* shuffled play order: indexes into `songs` */
+        orderPos: 0,
+        playedMs: 0,                /* time actually played of the current track (for scrobbling) */
+        lastTickAt: 0,
+        scrobbled: false,
+        failStreak: 0,              /* consecutive tracks that failed to play */
+        homeLoadedAt: 0,
+        rowMemory: {},              /* last focused card index per home row */
+        nowTint: null,              /* tint for the Now Playing screen only */
+        casting: false,             /* an AirPlay cast owns the player bar */
+        barSig: '',
         seekerTimer: null,
         lastGrid: null,
         now: {
             lyrics: [],
             line: -1,
-            seq: 0
+            seq: 0,
+            built: -1
         },
         search: {
             query: '',
@@ -72,6 +89,7 @@
 
     function show(screenId) {
         var screens = document.querySelectorAll('.screen');
+        var fromAirPlay = $('screen-airplay').className.indexOf('active') >= 0;
         var i;
         for (i = 0; i < screens.length; i++) {
             screens[i].className = screens[i].className.replace(/\s*active/, '');
@@ -84,27 +102,60 @@
          * bottom edge while it is up.
          */
         document.body.className = document.body.className
-            .replace(/\s*now-active/, '') +
-            (screenId === 'screen-now' ? ' now-active' : '');
+            .replace(/\s*now-active/, '')
+            .replace(/\s*connect-active/, '') +
+            ((screenId === 'screen-now' || screenId === 'screen-airplay') ?
+                ' now-active' : '') +
+            (screenId === 'screen-connect' ? ' connect-active' : '');
 
         /*
          * The album tint is painted on `#backdrop` as well as the screen, so it
          * has to be taken back off when the screen is left — otherwise the
          * album colour would follow the user onto every other screen.
          */
-        if (screenId !== 'screen-now') {
+        /*
+         * The album tint belongs to the two stage screens only. It is remembered and
+         * painted when one of them is shown, and cleared everywhere else; painting it
+         * as soon as it was computed made the whole app change colour whenever a track
+         * started from an album or search screen.
+         */
+        if (screenId === 'screen-airplay') {
+            applyNowTint(airplayTint, 'screen-airplay');
+        } else if (screenId === 'screen-now') {
+            applyNowTint(state.nowTint, 'screen-now');
+        } else {
             applyNowTint(null);
         }
 
         /* The nav pill only makes sense once a server is connected. */
-        el.nav.className = (screenId === 'screen-connect') ? 'hidden' : '';
+        el.nav.className = (screenId === 'screen-connect' && !state.client) ? 'hidden' : '';
 
         focusFirst();
     }
 
+    /*
+     * Messages appear as a toast and fade after a few seconds. Routine ones that
+     * only restate what is already on screen (Playing., Library loaded., counts)
+     * are kept out of the way; errors stay longer.
+     */
+    var statusTimer = null;
+    var QUIET_STATUS = /^(Playing\.|Library loaded\.|Now playing\.|Nothing playing yet\.|Connected to |\d+ (artist|playlist|track)\(s\)\.)/;
+
     function setStatus(message, isError) {
+        var cls = 'status' + (isError ? ' error' : '');
         el.status.innerHTML = message || '';
-        el.status.className = 'status' + (isError ? ' error' : '');
+        if (statusTimer) {
+            global.clearTimeout(statusTimer);
+            statusTimer = null;
+        }
+        if (!message || (!isError && QUIET_STATUS.test(message))) {
+            el.status.className = cls;
+            return;
+        }
+        el.status.className = cls + ' show';
+        statusTimer = global.setTimeout(function () {
+            el.status.className = cls;
+        }, isError ? 8000 : 3500);
     }
 
     function saveConnection(conn) {
@@ -140,21 +191,143 @@
             .replace(/"/g, '&quot;');
     }
 
+    /* ---------- Art loading and entrance motion ---------- */
+
+    /*
+     * Cover art goes in a child layer that starts transparent and fades in when the image has
+     * actually loaded, instead of popping in half-drawn. `fadeInArt(root)` finds every layer
+     * under `root` that still has a `data-src` and loads it.
+     */
+    function artLayer(url) {
+        return '<span class="art-img" data-src="' + escapeHtml(url) + '"></span>';
+    }
+
+    var artQueue = [];
+    var artActive = 0;
+    var ART_PARALLEL = 3;
+
+    /*
+     * Covers load a few at a time rather than all at once, so decoding them (done on the main thread
+     * of a TV's browser) is spread over many frames instead of landing in one. A cover whose card
+     * has since been removed is skipped.
+     */
+    function pumpArt() {
+        var node, url, img;
+        while (artActive < ART_PARALLEL && artQueue.length) {
+            node = artQueue.shift();
+            if (!node.parentNode) {
+                continue;
+            }
+            url = node.getAttribute('data-load');
+            node.removeAttribute('data-load');
+            artActive++;
+            img = new Image();
+            img.onload = (function (n, u) {
+                return function () {
+                    artActive--;
+                    n.style.backgroundImage = 'url(\'' + u + '\')';
+                    n.className += ' in';
+                    pumpArt();
+                };
+            }(node, url));
+            img.onerror = function () {
+                artActive--;
+                pumpArt();
+            };
+            img.src = url;
+        }
+    }
+
+    function fadeInArt(root) {
+        var nodes = root.querySelectorAll('.art-img[data-src]');
+        var i;
+        for (i = 0; i < nodes.length; i++) {
+            nodes[i].setAttribute('data-load', nodes[i].getAttribute('data-src'));
+            nodes[i].removeAttribute('data-src');
+            artQueue.push(nodes[i]);
+        }
+        pumpArt();
+    }
+
+    /*
+     * A cover that changes (player bar, Now Playing, AirPlay) keeps showing the old one until the
+     * new image is ready, then fades up. A stale load for an earlier track is ignored.
+     */
+    function setCoverImage(node, url) {
+        var img;
+        if (!url) {
+            node.removeAttribute('data-cover');
+            node.style.backgroundImage = '';
+            return;
+        }
+        if (node.getAttribute('data-cover') === url) {
+            return;
+        }
+        node.setAttribute('data-cover', url);
+        img = new Image();
+        img.onload = function () {
+            if (node.getAttribute('data-cover') !== url) {
+                return;
+            }
+            node.style.backgroundImage = 'url(\'' + url + '\')';
+            node.className = node.className.replace(/\s*fresh\b/g, '');
+            void node.offsetWidth;
+            node.className += ' fresh';
+        };
+        img.src = url;
+    }
+
+    /* Class and inline delay that make the Nth item of a list rise in after the one before it. */
+    var CHUNK = 4;                /* cards added per tick when a page is appended */
+    var ENTER_STEP_MS = 45;
+    var ENTER_MAX = 10;
+
+    function enterAttrs(n) {
+        var ms;
+        if (n >= ENTER_MAX) {
+            return { cls: '', style: '' };
+        }
+        ms = n * ENTER_STEP_MS;
+        return { cls: ' enter',
+                 style: ' style="-webkit-animation-delay:' + ms + 'ms;animation-delay:' + ms + 'ms"' };
+    }
+
     /* ---------- Connect ---------- */
 
-    function connect(url, user, pass) {
-        var client = new Subsonic(url, user, pass);
+    /*
+     * Log in with token auth first, so the password never travels in a URL. A server
+     * that refuses it with a Subsonic error (too old, or LDAP users) is retried once
+     * with the legacy plaintext login, and that choice is remembered for next launch.
+     * Network failures are not retried: a different login scheme cannot fix them.
+     */
+    function connect(url, user, pass, bridge) {
+        var saved = loadConnection();
+        var firstMode = (saved && saved.auth === 'plain' && saved.url === url) ? 'plain' : 'token';
+
         setStatus('Connecting to ' + url + ' ...', false);
 
-        client.ping(function (response) {
-            state.client = client;
-            saveConnection({ url: url, user: user, pass: pass });
-            setAvatar(user);
-            setStatus('Connected to ' + (response.version || 'server') + '.', false);
-            loadHome();
-        }, function (err) {
-            setStatus('Connection failed: ' + err.message, true);
-        });
+        function attempt(mode) {
+            var client = new Subsonic(url, user, pass, mode);
+            client.ping(function (response) {
+                state.client = client;
+                state.homeLoadedAt = 0;
+                saveConnection({ url: url, user: user, pass: pass, bridge: bridge || '', auth: client.auth });
+                setAvatar(user);
+                AirPlay.configure(bridge, url);
+                AirPlay.start();
+                resetSettingsForm();
+                setStatus('Connected to ' + (response.version || 'server') + '.', false);
+                loadHome(true);
+            }, function (err) {
+                if (mode === 'token' && err.api) {
+                    attempt('plain');
+                    return;
+                }
+                setStatus('Connection failed: ' + err.message, true);
+            });
+        }
+
+        attempt(firstMode);
     }
 
     /*
@@ -184,14 +357,20 @@
                   exhausted: false, loading: false, local: true },
         added: { list: 'added-list', items: [], kind: 'album', offset: 0,
                  exhausted: false, loading: false },
+        favorites: { list: 'fav-list', items: [], kind: 'song', offset: 0,
+                     exhausted: false, loading: false },
         top: { list: 'top-list', items: [], kind: 'song', offset: 0,
                exhausted: false, loading: false }
     };
 
-    var SECTION_ORDER = ['recent', 'added', 'top'];
+    var SECTION_ORDER = ['recent', 'favorites', 'added', 'top'];
+    var SECTION_TITLE = { recent: 'title-recent', favorites: 'title-favorites',
+                          added: 'title-added', top: 'title-top' };
 
     /* How many items to request per page. */
-    var PAGE_SIZE = 24;
+    var PAGE_SIZE = 12;
+    /* Start fetching the next page this many cards before the end of a row, not at the last card. */
+    var PREFETCH_AHEAD = 6;
 
     /*
      * Top Picks is ranked by playCount, which the server cannot sort by, so
@@ -332,7 +511,12 @@
         }
     }
 
-    function loadHome() {
+    /*
+     * `keepAirPlay` is set on the first load after connecting: a cast can start
+     * while the library is still loading, and the finished load must not pull
+     * the user off the AirPlay screen it already switched to.
+     */
+    function loadHome(keepAirPlay) {
         var pending = SECTION_ORDER.length;
         var failed = false;
 
@@ -342,6 +526,11 @@
             pending--;
             if (pending === 0 && !failed) {
                 setStatus('Library loaded.', false);
+                state.homeLoadedAt = new Date().getTime();
+                if (keepAirPlay === true &&
+                        $('screen-airplay').className.indexOf('active') >= 0) {
+                    return;
+                }
                 show('screen-albums');
             }
         }
@@ -352,6 +541,8 @@
         }
 
         loadSection('recent', done, fail);
+        /* A server without favorites support must not fail the whole home screen. */
+        loadSection('favorites', done, done);
         loadSection('added', done, fail);
         loadSection('top', done, fail);
     }
@@ -396,6 +587,23 @@
         if (section.local) {
             receive(loadHistory().slice(section.offset,
                 section.offset + PAGE_SIZE));
+            return;
+        }
+
+        if (key === 'favorites') {
+            /* All starred songs arrive at once, newest first; paging slices the list. */
+            if (section.pool) {
+                receive(section.pool.slice(section.offset, section.offset + PAGE_SIZE));
+                return;
+            }
+            state.client.getStarred(function (response) {
+                var songs = (response.starred2 && response.starred2.song) || [];
+                songs.sort(function (a, b) {
+                    return String(b.starred || '').localeCompare(String(a.starred || ''));
+                });
+                section.pool = songs;
+                receive(songs.slice(0, PAGE_SIZE));
+            }, fail);
             return;
         }
 
@@ -451,12 +659,15 @@
         var items = section.items;
         var listEl = $(section.list);
         var html = [];
-        var i, item, art, title, sub;
+        var i, item, art, title, sub, enter, animate;
 
         if (!items.length) {
-            listEl.innerHTML = '<li class="empty">Nothing here yet.</li>';
+            listEl.innerHTML = '';
+            updateHomeVisibility();
             return;
         }
+        animate = !section.entered;
+        section.entered = true;
 
         if (typeof from !== 'number') {
             from = 0;
@@ -474,10 +685,11 @@
         for (i = from; i < items.length; i++) {
             item = items[i];
             art = item.coverArt ?
-                '<span class="art" style="background-image:url(\'' +
-                    escapeHtml(state.client.coverArtUrl(item.coverArt, CARD_ART_SIZE)) +
-                    '\')"></span>' :
+                '<span class="art">' +
+                    artLayer(state.client.coverArtUrl(item.coverArt, CARD_ART_SIZE)) + '</span>' :
                 '<span class="art-fallback">&#9835;</span>';
+            /* Rows rise in the first time they appear; a later rebuild (e.g. Recently Played) stays still. */
+            enter = enterAttrs((animate && from === 0 && !lite) ? i : ENTER_MAX);
 
             if (section.kind === 'song') {
                 title = item.title;
@@ -488,7 +700,8 @@
             }
 
             html.push(
-                '<li class="card" data-list="' + key + '" data-index="' + i + '"' +
+                '<li class="card' + enter.cls + '"' + enter.style +
+                    ' data-list="' + key + '" data-index="' + i + '"' +
                     ' data-kind="' + section.kind + '"' +
                     ' data-id="' + escapeHtml(item.id || '') + '"' +
                     ' data-title="' + escapeHtml(title) + '" tabindex="0">' +
@@ -505,29 +718,213 @@
          * re-parses the whole list and destroys the focused card, dropping
          * focus to <body> and breaking D-pad navigation mid-row.
          */
-        listEl.insertAdjacentHTML('beforeend', html.join(''));
+        appendCards(listEl, html, from === 0);
+        updateHomeVisibility();
+    }
+
+    /*
+     * A first render goes in at once. A later page is added a few cards at a time, a tick apart, so
+     * the browser never has to lay out, paint and decode a dozen covers inside one frame (that was
+     * the stall when a row reached its end and loaded more). A rebuild or a newer page makes any
+     * chunks still waiting for an older one stop.
+     */
+    function appendCards(listEl, parts, immediate) {
+        var token = (listEl.__token || 0) + 1;
+        var at = 0;
+        var t0 = new Date().getTime();
+
+        listEl.__token = token;
+        if (immediate || parts.length <= CHUNK) {
+            listEl.insertAdjacentHTML('beforeend', parts.join(''));
+            fadeInArt(listEl);
+            if (new Date().getTime() - t0 > 150) {
+                markSlow(1);
+            }
+            return;
+        }
+        (function step() {
+            if (listEl.__token !== token) {
+                return;
+            }
+            listEl.insertAdjacentHTML('beforeend', parts.slice(at, at + CHUNK).join(''));
+            fadeInArt(listEl);
+            at += CHUNK;
+            if (at < parts.length) {
+                global.setTimeout(step, 40);
+            }
+        }());
+    }
+
+    function setHidden(node, hidden) {
+        if (!node || (node.className.indexOf('hidden') >= 0) === hidden) {
+            return;                       /* an unchanged class would still restyle the page */
+        }
+        node.className = node.className.replace(/\s*hidden\b/g, '') + (hidden ? ' hidden' : '');
+    }
+
+    /*
+     * A row with nothing in it (no history yet, no favorites) is hidden along with its
+     * heading, instead of taking up space to say "Nothing here yet." If every row is
+     * empty a single message is shown.
+     */
+    function updateHomeVisibility() {
+        var any = false;
+        var i, key, has;
+        for (i = 0; i < SECTION_ORDER.length; i++) {
+            key = SECTION_ORDER[i];
+            has = SECTIONS[key].items.length > 0;
+            any = any || has;
+            setHidden($(SECTION_TITLE[key]), !has);
+            setHidden($(SECTIONS[key].list), !has);
+        }
+        setHidden($('home-empty'), any || !state.homeLoadedAt);
+    }
+
+    /* After starring or unstarring, rebuild the Favorites row from the server. */
+    function refreshFavorites() {
+        var section = SECTIONS.favorites;
+        section.items = [];
+        section.offset = 0;
+        section.exhausted = false;
+        section.loading = false;
+        section.pool = null;
+        loadSection('favorites', updateHomeVisibility, function () {});
     }
 
     /* ---------- Album detail ---------- */
 
-    function openAlbum(album, returnTo) {
+    /*
+     * The art of a card flies to the album header's cover and, on Back, flies back to the card it
+     * came from. It is a copy of the art moved with a transform (cheap on a TV), starting where
+     * `from` is and ending on `to`; both are squares in viewport coordinates.
+     */
+    function flyArt(from, to, url, onDone) {
+        var fly = document.createElement('div');
+        var scale = from.width / to.width;
+
+        fly.className = 'fly-art';
+        fly.style.left = to.left + 'px';
+        fly.style.top = to.top + 'px';
+        fly.style.width = to.width + 'px';
+        fly.style.height = to.height + 'px';
+        fly.style.borderRadius = '12px';
+        fly.style.backgroundImage = 'url(\'' + url + '\')';
+        fly.style.webkitTransition = 'none';
+        fly.style.transition = 'none';
+        fly.style.webkitTransform = 'translate(' + (from.left - to.left) + 'px,' +
+            (from.top - to.top) + 'px) scale(' + scale + ')';
+        fly.style.transform = fly.style.webkitTransform;
+        document.body.appendChild(fly);
+        void fly.offsetWidth;
+        fly.style.webkitTransition = '';
+        fly.style.transition = '';
+        fly.style.webkitTransform = 'translate(0px,0px) scale(1)';
+        fly.style.transform = 'translate(0px,0px) scale(1)';
+        global.setTimeout(function () {
+            if (fly.parentNode) {
+                fly.parentNode.removeChild(fly);
+            }
+            if (onDone) {
+                onDone();
+            }
+        }, 450);
+    }
+
+    function inViewport(rect) {
+        return rect.width > 0 && rect.top >= 0 && rect.left >= 0 &&
+            rect.bottom <= global.innerHeight && rect.right <= global.innerWidth;
+    }
+
+    function setAlbumCover(url) {
+        el.albumCover.style.backgroundImage = url ? 'url(\'' + url + '\')' : '';
+    }
+
+    /*
+     * `sourceCard` is the card that was activated, when there is one; its art is what flies.
+     * Without it (a search result, a song card) the album simply opens.
+     */
+    function openAlbum(album, returnTo, sourceCard) {
+        var artEl, srcRect = null, coverUrl = '';
         if (!album) {
             return;
         }
         state.albumReturn = returnTo || 'screen-albums';
+        state.albumSource = null;
+        coverUrl = album.coverArt ? state.client.coverArtUrl(album.coverArt, CARD_ART_SIZE) : '';
+        artEl = sourceCard && sourceCard.querySelector && !lite ? sourceCard.querySelector('.art') : null;
+        if (artEl && coverUrl) {
+            srcRect = artEl.getBoundingClientRect();
+            if (!inViewport(srcRect)) {
+                srcRect = null;
+            } else {
+                state.albumSource = {
+                    list: sourceCard.getAttribute('data-list'),
+                    id: sourceCard.getAttribute('data-id'),
+                    url: coverUrl
+                };
+            }
+        }
         setStatus('Loading ' + album.name + ' ...', false);
 
         state.client.getAlbum(album.id, function (response) {
             var songs = (response.album && response.album.song) || [];
+            var toRect;
             state.songs = songs;
             state.currentIndex = -1;
             el.albumTitle.innerHTML = escapeHtml(album.name);
             el.albumArtist.innerHTML = escapeHtml(album.artist);
             renderSongs(songs);
+            setAlbumCover(coverUrl);
+            el.albumCover.className = 'album-cover' + (srcRect ? ' flying' : '');
             setStatus(songs.length + ' track(s).', false);
+            $('screen-album').scrollTop = 0;
             show('screen-album');
+            if (srcRect) {
+                toRect = el.albumCover.getBoundingClientRect();
+                flyArt(srcRect, toRect, coverUrl, function () {
+                    el.albumCover.className = 'album-cover';
+                });
+            }
         }, function (err) {
             setStatus('Could not load album: ' + err.message, true);
+        });
+    }
+
+    /*
+     * Back from an album. If the album was opened from a card that is still on screen, the cover
+     * flies back into that card's place and the card regains focus; otherwise it is a plain
+     * return. The target is the card's focused size (it grows 7% and lifts 6 px), measured before
+     * focus so the art lands exactly where the focus animation leaves it.
+     */
+    function leaveAlbum() {
+        var src = state.albumSource;
+        var returnTo = state.albumReturn;
+        var cover = el.albumCover;
+        var from, card, art, r, to;
+
+        if (!src || !cover.style.backgroundImage || lite) {
+            show(returnTo);
+            return;
+        }
+        from = cover.getBoundingClientRect();
+        show(returnTo);
+        card = document.querySelector('.screen.active .card[data-list="' + src.list +
+            '"][data-id="' + src.id + '"]');
+        art = card ? card.querySelector('.art') : null;
+        if (!art) {
+            return;
+        }
+        r = art.getBoundingClientRect();
+        if (!inViewport(r)) {
+            focusNode(card);
+            return;
+        }
+        to = { left: r.left - 0.035 * r.width, top: r.top - 0.035 * r.width - 6,
+               width: r.width * 1.07, height: r.height * 1.07 };
+        art.className += ' flying-hidden';
+        focusNode(card);
+        flyArt(from, to, src.url, function () {
+            art.className = art.className.replace(/\s*flying-hidden\b/g, '');
         });
     }
 
@@ -559,6 +956,11 @@
             el.albumTitle.innerHTML = escapeHtml(response.album.name || '');
             el.albumArtist.innerHTML = escapeHtml(response.album.artist || '');
             renderSongs(songs);
+            state.albumSource = null;
+            setAlbumCover(response.album.coverArt ?
+                state.client.coverArtUrl(response.album.coverArt, CARD_ART_SIZE) : '');
+            el.albumCover.className = 'album-cover';
+            $('screen-album').scrollTop = 0;
             show('screen-album');
 
             for (i = 0; i < songs.length; i++) {
@@ -581,7 +983,7 @@
 
     function renderSongs(songs) {
         var html = [];
-        var i, song;
+        var i, song, enter;
 
         if (!songs.length) {
             el.songList.innerHTML = '<li class="empty">No tracks in this album.</li>';
@@ -590,8 +992,9 @@
 
         for (i = 0; i < songs.length; i++) {
             song = songs[i];
+            enter = enterAttrs(i);
             html.push(
-                '<li class="track" data-index="' + i + '"' +
+                '<li class="track' + enter.cls + '"' + enter.style + ' data-index="' + i + '"' +
                     ' data-id="' + escapeHtml(song.id || '') + '"' +
                     ' data-title="' + escapeHtml(song.title) + '" tabindex="0">' +
                     '<span class="track-num">' + (song.track || (i + 1)) + '</span>' +
@@ -612,20 +1015,36 @@
      * punctuation and accented names into "#", so the list is flattened and
      * re-sorted here with a locale-aware comparison.
      */
-    function artistSortKey(name) {
-        return String(name || '').replace(/^\s+/, '').toLowerCase();
+    /*
+     * Accented letters sort and group with their base letter ("Álvaro" under A,
+     * "Ñengo Flow" under N) instead of falling into "#". String.normalize splits
+     * a letter from its accent where the engine has it; the table covers the Latin
+     * letters of older engines that lack it. Non-Latin scripts still go to "#".
+     */
+    var ACCENT_FROM = '\u00c0\u00c1\u00c2\u00c3\u00c4\u00c5\u00c7\u00c8\u00c9\u00ca\u00cb' +
+        '\u00cc\u00cd\u00ce\u00cf\u00d1\u00d2\u00d3\u00d4\u00d5\u00d6\u00d8\u00d9\u00da\u00db\u00dc\u00dd' +
+        '\u00e0\u00e1\u00e2\u00e3\u00e4\u00e5\u00e7\u00e8\u00e9\u00ea\u00eb\u00ec\u00ed\u00ee\u00ef' +
+        '\u00f1\u00f2\u00f3\u00f4\u00f5\u00f6\u00f8\u00f9\u00fa\u00fb\u00fc\u00fd\u00ff';
+    var ACCENT_TO = 'AAAAAACEEEEIIIINOOOOOOUUUUY' + 'aaaaaaceeeeiiiinoooooouuuuyy';
+
+    function stripAccents(text) {
+        var out = String(text || '');
+        var i, at;
+        if (out.normalize) {
+            out = out.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        }
+        /* Whatever survives (or everything, without normalize) goes through the table. */
+        for (i = 0; i < out.length; i++) {
+            at = ACCENT_FROM.indexOf(out.charAt(i));
+            if (at >= 0) {
+                out = out.slice(0, i) + ACCENT_TO.charAt(at) + out.slice(i + 1);
+            }
+        }
+        return out;
     }
 
-    function compareArtists(a, b) {
-        var ka = artistSortKey(a.name);
-        var kb = artistSortKey(b.name);
-        if (ka < kb) {
-            return -1;
-        }
-        if (ka > kb) {
-            return 1;
-        }
-        return 0;
+    function artistSortKey(name) {
+        return stripAccents(name).replace(/^\s+/, '').toLowerCase();
     }
 
     /*
@@ -634,7 +1053,7 @@
      * "#", matching the convention Subsonic clients use.
      */
     function artistLetter(name) {
-        var ch = String(name || '').replace(/^\s+/, '').charAt(0).toUpperCase();
+        var ch = stripAccents(name).replace(/^\s+/, '').charAt(0).toUpperCase();
         return /[A-Z0-9]/.test(ch) ? ch : '#';
     }
 
@@ -756,9 +1175,8 @@
                 letters.push(letter);
             }
             art = item.coverArt ?
-                '<span class="artist-art" style="background-image:url(\'' +
-                    escapeHtml(state.client.coverArtUrl(item.coverArt, 144)) +
-                    '\')"></span>' :
+                '<span class="artist-art">' +
+                    artLayer(state.client.coverArtUrl(item.coverArt, 144)) + '</span>' :
                 '<span class="artist-art empty"></span>';
 
             html.push(
@@ -780,6 +1198,7 @@
         state.artists.letters = letters;
         renderArtistIndex();
         el.artistList.innerHTML = html.join('');
+        fadeInArt(el.artistList);
     }
 
     /* Jump the list to the first artist under a letter. */
@@ -825,10 +1244,8 @@
                             ' data-title="' + escapeHtml(albums[i].name) + '"' +
                             ' tabindex="0">' +
                             (albums[i].coverArt ?
-                                '<span class="art" style="background-image:url(\'' +
-                                    escapeHtml(state.client.coverArtUrl(
-                                        albums[i].coverArt, CARD_ART_SIZE)) +
-                                    '\')"></span>' :
+                                '<span class="art">' + artLayer(state.client.coverArtUrl(
+                                    albums[i].coverArt, CARD_ART_SIZE)) + '</span>' :
                                 '<span class="art-fallback">&#9835;</span>') +
                             '<span class="body">' +
                                 '<span class="card-title">' +
@@ -840,6 +1257,7 @@
                     );
                 }
                 el.artistAlbums.innerHTML = html.join('');
+                fadeInArt(el.artistAlbums);
             }
             setStatus(albums.length + ' album(s) by ' + artist.name + '.', false);
             show('screen-artist');
@@ -924,9 +1342,8 @@
             item = items[i];
             count = parseInt(item.songCount, 10) || 0;
             art = item.coverArt ?
-                '<span class="playlist-art" style="background-image:url(\'' +
-                    escapeHtml(state.client.coverArtUrl(item.coverArt, 144)) +
-                    '\')"></span>' :
+                '<span class="playlist-art">' +
+                    artLayer(state.client.coverArtUrl(item.coverArt, 144)) + '</span>' :
                 '<span class="playlist-art empty"></span>';
 
             html.push(
@@ -947,6 +1364,7 @@
             );
         }
         el.playlistList.innerHTML = html.join('');
+        fadeInArt(el.playlistList);
     }
 
     /*
@@ -997,7 +1415,7 @@
 
     function renderPlaylistSongs(songs) {
         var html = [];
-        var i, song;
+        var i, song, enter;
 
         if (!songs.length) {
             el.playlistSongs.innerHTML =
@@ -1007,8 +1425,9 @@
 
         for (i = 0; i < songs.length; i++) {
             song = songs[i];
+            enter = enterAttrs(i);
             html.push(
-                '<li class="track" data-index="' + i + '"' +
+                '<li class="track' + enter.cls + '"' + enter.style + ' data-index="' + i + '"' +
                     ' data-id="' + escapeHtml(song.id || '') + '"' +
                     ' data-title="' + escapeHtml(song.title) + '" tabindex="0">' +
                     '<span class="track-num">' + (i + 1) + '</span>' +
@@ -1134,9 +1553,8 @@
                 kind = 'Song';
             }
             art = item.data.coverArt ?
-                '<span class="result-art" style="background-image:url(\'' +
-                    escapeHtml(state.client.coverArtUrl(item.data.coverArt, 144)) +
-                    '\')"></span>' :
+                '<span class="result-art">' +
+                    artLayer(state.client.coverArtUrl(item.data.coverArt, 144)) + '</span>' :
                 '<span class="result-art empty"></span>';
 
             html.push(
@@ -1152,6 +1570,7 @@
             );
         }
         el.searchResults.innerHTML = html.join('');
+        fadeInArt(el.searchResults);
     }
 
     function runSearch() {
@@ -1355,13 +1774,16 @@
         };
     }
 
-    function applyNowTint(tint) {
-        var screen = $('screen-now');
+    function applyNowTint(tint, screenId) {
+        var screen = $(screenId || 'screen-now');
         var backdrop = $('backdrop');
         var css;
 
+        /* Only one of the two stage screens carries a tint at a time. */
+        $('screen-now').style.background = '';
+        $('screen-airplay').style.background = '';
+
         if (!tint) {
-            screen.style.background = '';
             backdrop.style.background = '';
             return;
         }
@@ -1377,12 +1799,19 @@
         backdrop.style.background = css;
     }
 
+    function setNowTint(tint) {
+        state.nowTint = tint;
+        if ($('screen-now').className.indexOf('active') >= 0) {
+            applyNowTint(tint, 'screen-now');
+        }
+    }
+
     function tintNowPlaying(song) {
         var seq = ++npTintSeq;
         var img;
 
         if (!song || !song.coverArt || !state.client) {
-            applyNowTint(null);
+            setNowTint(null);
             return;
         }
         img = new Image();
@@ -1390,11 +1819,11 @@
             if (seq !== npTintSeq) {
                 return;
             }
-            applyNowTint(tintFromImage(img));
+            setNowTint(tintFromImage(img));
         };
         img.onerror = function () {
             if (seq === npTintSeq) {
-                applyNowTint(null);
+                setNowTint(null);
             }
         };
         img.src = state.client.coverArtUrl(song.coverArt, 96);
@@ -1402,6 +1831,7 @@
 
     function renderNowPlaying() {
         var song = state.currentSong;
+        renderFav();
 
         if (!song) {
             el.npCover.className = 'np-cover empty';
@@ -1419,12 +1849,11 @@
         el.npAlbum.innerHTML = escapeHtml(song.album);
 
         if (song.coverArt) {
-            el.npCover.className = 'np-cover';
-            el.npCover.style.backgroundImage = 'url(\'' +
-                state.client.coverArtUrl(song.coverArt, NP_ART_LARGE) + '\')';
+            el.npCover.className = el.npCover.className.replace(/\s*empty\b/g, '');
+            setCoverImage(el.npCover, state.client.coverArtUrl(song.coverArt, NP_ART_LARGE));
         } else {
             el.npCover.className = 'np-cover empty';
-            el.npCover.style.backgroundImage = '';
+            setCoverImage(el.npCover, '');
         }
         tintNowPlaying(song);
         renderLyrics();
@@ -1435,33 +1864,62 @@
      * line is highlighted and the window is kept short so the block never
      * grows past the stage.
      */
+    /*
+     * The lyrics are built once per song as one long column. Moving to the next line does not
+     * rewrite the text: it restyles the lines and slides the column so the current line sits
+     * near the top of the block, which the CSS transition turns into a glide.
+     */
+    var LYRIC_ANCHOR = 72;       /* y of the current line inside the block (one line down) */
+
     function renderLyrics() {
         var lines = state.now.lyrics;
         var current = state.now.line;
         var html = [];
-        var from, to, i;
+        var track, nodes, i, fresh = false;
 
         if (!lines.length) {
+            el.npLyrics.className = 'np-lyrics';
             el.npLyrics.innerHTML = '<p class="np-line current">' +
                 escapeHtml(state.currentSong ? state.currentSong.title : '') +
                 '</p>';
+            state.now.built = -1;
             return;
         }
 
-        /*
-         * The window is anchored on the current line so the highlight sits in
-         * the middle of the block and the surrounding lines scroll past it.
-         */
-        from = Math.max(0, current - 1);
-        to = Math.min(lines.length, from + NP_LYRIC_WINDOW);
-        from = Math.max(0, to - NP_LYRIC_WINDOW);
-
-        for (i = from; i < to; i++) {
-            html.push('<p class="np-line' +
-                (i === current ? ' current' : (i < current ? ' past' : '')) +
-                '">' + escapeHtml(lines[i].text) + '</p>');
+        if (state.now.built !== state.now.seq) {
+            for (i = 0; i < lines.length; i++) {
+                html.push('<p class="np-line">' + escapeHtml(lines[i].text) + '</p>');
+            }
+            el.npLyrics.className = 'np-lyrics has-track';
+            el.npLyrics.innerHTML = '<div class="np-lyrics-track">' + html.join('') + '</div>';
+            state.now.built = state.now.seq;
+            fresh = true;
         }
-        el.npLyrics.innerHTML = html.join('');
+
+        track = el.npLyrics.firstChild;
+        nodes = track.childNodes;
+        if (current < 0) {
+            current = 0;
+        }
+        for (i = 0; i < nodes.length; i++) {
+            setClassIf(nodes[i], 'np-line' +
+                (i === current ? ' current' : (i < current ? ' past' : '')));
+        }
+        if (!nodes[current]) {
+            return;
+        }
+        if (fresh) {
+            /* A new song starts in place; only later lines glide. */
+            track.style.webkitTransition = 'none';
+            track.style.transition = 'none';
+        }
+        track.style.webkitTransform = 'translateY(' + (LYRIC_ANCHOR - nodes[current].offsetTop) + 'px)';
+        track.style.transform = 'translateY(' + (LYRIC_ANCHOR - nodes[current].offsetTop) + 'px)';
+        if (fresh) {
+            void track.offsetWidth;
+            track.style.webkitTransition = '';
+            track.style.transition = '';
+        }
     }
 
     /*
@@ -1576,7 +2034,11 @@
     }
 
     /* ---------- Playback ---------- */
-    function playIndex(index) {
+    /*
+     * `pos` is the song's place in the shuffled order when it was reached by walking
+     * that order; a track picked by hand starts a fresh shuffle from itself.
+     */
+    function playIndex(index, pos) {
         var song = state.songs[index];
         var rows, i;
         if (!song) {
@@ -1585,35 +2047,37 @@
 
         state.currentIndex = index;
         state.currentSong = song;
+        if (state.shuffle) {
+            if (typeof pos === 'number') {
+                state.orderPos = pos;
+            } else {
+                buildOrder(index);
+            }
+        }
+        /* Starting a Subsonic track takes the TV from any AirPlay cast right away. */
+        AirPlay.release();
         el.audio.src = state.client.streamUrl(song.id);
         el.audio.play();
+
+        /* Tell the server what is playing; the "played" call follows at the halfway mark. */
+        state.playedMs = 0;
+        state.lastTickAt = 0;
+        state.scrobbled = false;
+        state.client.scrobble(song.id, false);
 
         /* Feed the Recently Played row. */
         recordPlay(song);
 
-        el.nowPlaying.innerHTML = escapeHtml(song.title) +
-            '<span class="np-artist">' + escapeHtml(song.artist) + '</span>';
-
-        /* Album art in the transport bar, matching the track being played. */
-        if (song.coverArt) {
-            el.npArt.className = 'np-art';
-            el.npArt.style.backgroundImage = 'url(\'' +
-                state.client.coverArtUrl(song.coverArt, NP_ART_SIZE) + '\')';
-        } else {
-            el.npArt.className = 'np-art empty';
-            el.npArt.style.backgroundImage = '';
-        }
+        /* Title, art and play state in the player bar. */
+        renderBar();
 
         /* Reset the seeker so the previous track's progress does not linger. */
-        el.seekFill.style.width = '0%';
-        el.seekElapsed.innerHTML = '0:00';
-        el.seekTotal.innerHTML = '0:00';
-        el.npSeekFill.style.width = '0%';
-        el.npElapsed.innerHTML = '0:00';
-        el.npTotal.innerHTML = '0:00';
+        resetSeekerDisplay();
         renderNowPlaying();
         loadLyrics(song);
-        setStatus('Loading ' + song.title + ' ...', false);
+        if (queueOpen()) {
+            refreshQueue();
+        }
 
         rows = el.songList.querySelectorAll('.track');
         for (i = 0; i < rows.length; i++) {
@@ -1624,16 +2088,306 @@
         }
     }
 
-    function playNext() {
-        if (state.currentIndex + 1 < state.songs.length) {
-            playIndex(state.currentIndex + 1);
+    /* ---------- Shuffle and repeat ---------- */
+
+    function loadPlayMode() {
+        var mode;
+        try {
+            mode = JSON.parse(global.localStorage.getItem(PLAYMODE_KEY));
+        } catch (e) {
+            mode = null;
+        }
+        state.shuffle = !!(mode && mode.shuffle);
+        state.repeat = (mode && (mode.repeat === 'all' || mode.repeat === 'one')) ? mode.repeat : 'off';
+    }
+
+    function savePlayMode() {
+        try {
+            global.localStorage.setItem(PLAYMODE_KEY,
+                JSON.stringify({ shuffle: state.shuffle, repeat: state.repeat }));
+        } catch (e) {
+            /* localStorage may be unavailable; non-fatal */
+        }
+    }
+
+    /*
+     * A shuffled order is a random permutation of the queue. `start` (an index) is
+     * placed first, so switching shuffle on, or picking a track, continues from it.
+     */
+    function buildOrder(start) {
+        var n = state.songs.length;
+        var idx = [];
+        var i, j, tmp;
+
+        for (i = 0; i < n; i++) {
+            if (i !== start) {
+                idx.push(i);
+            }
+        }
+        for (i = idx.length - 1; i > 0; i--) {
+            j = Math.floor(Math.random() * (i + 1));
+            tmp = idx[i];
+            idx[i] = idx[j];
+            idx[j] = tmp;
+        }
+        state.order = (typeof start === 'number' && start >= 0) ? [start].concat(idx) : idx;
+        state.orderPos = 0;
+    }
+
+    /*
+     * The track after the current one, as { index, pos } or null at the end of the
+     * queue. `auto` is true when the previous track ended by itself: only then does
+     * repeat-one replay it. The Next button (or skipping a broken track) moves on.
+     */
+    function nextTrack(auto) {
+        var n = state.songs.length;
+        var cur = state.currentIndex;
+        var tmp;
+
+        if (!n) {
+            return null;
+        }
+        if (auto && state.repeat === 'one' && cur >= 0) {
+            return { index: cur, pos: state.shuffle ? state.orderPos : undefined };
+        }
+        if (state.shuffle) {
+            if (state.order.length !== n || state.order[state.orderPos] !== cur) {
+                buildOrder(cur);
+            }
+            if (state.orderPos + 1 < state.order.length) {
+                return { index: state.order[state.orderPos + 1], pos: state.orderPos + 1 };
+            }
+            if (state.repeat !== 'off') {
+                buildOrder(-1);                      /* every track played: reshuffle */
+                if (n > 1 && state.order[0] === cur) {
+                    tmp = state.order[0];
+                    state.order[0] = state.order[1];
+                    state.order[1] = tmp;            /* never repeat the same track back to back */
+                }
+                return { index: state.order[0], pos: 0 };
+            }
+            return null;
+        }
+        if (cur + 1 < n) {
+            return { index: cur + 1 };
+        }
+        return state.repeat !== 'off' ? { index: 0 } : null;
+    }
+
+    function prevTrack() {
+        if (state.shuffle) {
+            if (state.orderPos > 0 && state.order[state.orderPos] === state.currentIndex) {
+                return { index: state.order[state.orderPos - 1], pos: state.orderPos - 1 };
+            }
+            return null;
+        }
+        return state.currentIndex > 0 ? { index: state.currentIndex - 1 } : null;
+    }
+
+    /* Button handlers receive the click event, so only a literal `true` means "ended by itself". */
+    function playNext(auto) {
+        var next;
+        if (auto !== true && airplaySourceActive()) {
+            return;                       /* the phone controls a cast's queue */
+        }
+        next = nextTrack(auto === true);
+        if (next) {
+            playIndex(next.index, next.pos);
         }
     }
 
     function playPrev() {
-        if (state.currentIndex > 0) {
-            playIndex(state.currentIndex - 1);
+        var prev;
+        if (airplaySourceActive()) {
+            return;
         }
+        prev = prevTrack();
+        if (prev) {
+            playIndex(prev.index, prev.pos);
+        }
+    }
+
+    function toggleShuffle() {
+        state.shuffle = !state.shuffle;
+        if (state.shuffle && state.currentIndex >= 0) {
+            buildOrder(state.currentIndex);
+        }
+        savePlayMode();
+        renderPlayMode();
+        if (queueOpen()) {
+            refreshQueue();
+        }
+    }
+
+    function cycleRepeat() {
+        state.repeat = state.repeat === 'off' ? 'all' : (state.repeat === 'all' ? 'one' : 'off');
+        savePlayMode();
+        renderPlayMode();
+        if (queueOpen()) {
+            refreshQueue();
+        }
+    }
+
+    var REPEAT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>';
+    var REPEAT_ONE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4zm-4-2V9h-1l-2 1v1h1.5v4H13z"/></svg>';
+
+    function renderPlayMode() {
+        el.npShuffle.className = state.shuffle ? 'on' : '';
+        el.npShuffle.setAttribute('aria-label', state.shuffle ? 'Shuffle on' : 'Shuffle off');
+        el.npRepeat.className = state.repeat === 'off' ? '' : 'on';
+        el.npRepeat.innerHTML = state.repeat === 'one' ? REPEAT_ONE_ICON : REPEAT_ICON;
+        el.npRepeat.setAttribute('aria-label', state.repeat === 'one' ? 'Repeat one' :
+            (state.repeat === 'all' ? 'Repeat all' : 'Repeat off'));
+    }
+
+    /* ---------- Favorites ---------- */
+
+    var HEART_FILLED = 'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z';
+    var HEART_OUTLINE = 'M16.5 3c-1.74 0-3.41.81-4.5 2.09C10.91 3.81 9.24 3 7.5 3 4.42 3 2 5.42 2 8.5c0 3.78 3.4 6.86 8.55 11.54L12 21.35l1.45-1.32C18.6 15.36 22 12.28 22 8.5 22 5.42 19.58 3 16.5 3zm-4.4 15.55l-.1.1-.1-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5c2 0 3.5 1.5 3.5 3.5 0 2.89-3.14 5.74-7.9 10.05z';
+
+    function renderFav() {
+        var song = state.currentSong;
+        var on = !!(song && song.starred);
+        $('np-fav-path').setAttribute('d', on ? HEART_FILLED : HEART_OUTLINE);
+        $('np-fav-label').innerHTML = on ? 'Favorited' : 'Favorite';
+        el.npFav.className = on ? 'on' : '';
+        el.npFav.setAttribute('aria-label', on ? 'Remove from favorites' : 'Add to favorites');
+    }
+
+    /* Star or unstar the playing track on the server; the heart flips at once and rolls back on failure. */
+    function toggleFavorite() {
+        var song = state.currentSong;
+        var on;
+        if (!song || !state.client) {
+            setStatus('Play a song first.', false);
+            return;
+        }
+        on = !song.starred;
+        if (on) {
+            song.starred = new Date().toISOString();
+        } else {
+            delete song.starred;
+        }
+        renderFav();
+        state.client.star(song.id, on, function () {
+            refreshFavorites();
+            setStatus(on ? 'Added to favorites.' : 'Removed from favorites.', false);
+        }, function (err) {
+            if (on) {
+                delete song.starred;
+            } else {
+                song.starred = new Date().toISOString();
+            }
+            renderFav();
+            setStatus('Could not update favorite: ' + err.message, true);
+        });
+    }
+
+    /* ---------- Up Next ---------- */
+
+    /*
+     * What will play after the current track, in the order it will play: the shuffled
+     * order when shuffle is on, otherwise the rest of the queue (and, with repeat-all,
+     * the start of it again). Each item is { index, pos } like nextTrack().
+     */
+    function upNext() {
+        var n = state.songs.length;
+        var cur = state.currentIndex;
+        var items = [];
+        var i;
+
+        if (!n || cur < 0) {
+            return items;
+        }
+        if (state.shuffle) {
+            if (state.order.length === n && state.order[state.orderPos] === cur) {
+                for (i = state.orderPos + 1; i < n; i++) {
+                    items.push({ index: state.order[i], pos: i });
+                }
+            }
+        } else {
+            for (i = cur + 1; i < n; i++) {
+                items.push({ index: i });
+            }
+            if (state.repeat === 'all') {
+                for (i = 0; i < cur; i++) {
+                    items.push({ index: i });
+                }
+            }
+        }
+        return items.slice(0, 60);
+    }
+
+    function queueOpen() {
+        return $('screen-now').className.indexOf('queue-open') >= 0;
+    }
+
+    function queueRows() {
+        return $('queue-list').querySelectorAll('.queue-row');
+    }
+
+    function renderQueue() {
+        var items = upNext();
+        var html = [];
+        var i, song;
+
+        if (!items.length) {
+            $('queue-list').innerHTML = '<li class="queue-empty">' +
+                (state.repeat === 'one' ? 'Repeating this track.' : 'Nothing queued after this track.') + '</li>';
+            return;
+        }
+        for (i = 0; i < items.length; i++) {
+            song = state.songs[items[i].index];
+            html.push('<li class="queue-row" tabindex="0" data-index="' + items[i].index + '"' +
+                (typeof items[i].pos === 'number' ? ' data-pos="' + items[i].pos + '"' : '') + '>' +
+                '<span class="q-title">' + escapeHtml(song.title) + '</span>' +
+                '<span class="q-artist">' + escapeHtml(song.artist) + '</span>' +
+                '<span class="q-dur">' + formatDuration(song.duration) + '</span></li>');
+        }
+        $('queue-list').innerHTML = html.join('');
+    }
+
+    /* Re-render after the queue changed under the user, keeping focus inside the list if it was there. */
+    function refreshQueue() {
+        var hadFocus = document.activeElement &&
+            document.activeElement.className.indexOf('queue-row') >= 0;
+        var first;
+        renderQueue();
+        if (hadFocus) {
+            first = queueRows()[0];
+            focusNode(first || el.npQueue);
+        }
+    }
+
+    function toggleQueue(open) {
+        var screen = $('screen-now');
+        var on = typeof open === 'boolean' ? open : !queueOpen();
+        var first;
+
+        screen.className = screen.className.replace(/\s*queue-open\b/g, '') + (on ? ' queue-open' : '');
+        setHidden($('np-queuepanel'), !on);
+        el.npQueue.className = on ? 'on' : '';
+        if (on) {
+            renderQueue();
+            first = queueRows()[0];
+            if (first) {
+                focusNode(first);
+            }
+        }
+    }
+
+    function playQueueRow(row) {
+        var pos = row.getAttribute('data-pos');
+        playIndex(parseInt(row.getAttribute('data-index'), 10), pos === null ? undefined : parseInt(pos, 10));
+    }
+
+    function isNowExtra(node) {
+        return !!(node && (node.id === 'np-fav' || node.id === 'np-queue'));
+    }
+
+    /* The Now Playing screen's own buttons (they carry no class, only an id). */
+    function isNowAction(node) {
+        return !!(node && /^np-(shuffle|prev|play|next|repeat)$/.test(node.id));
     }
 
     /* ---------- Playback state and seeker ---------- */
@@ -1672,8 +2426,59 @@
         return 0;
     }
 
+    /* Played time counts only while the track really plays, so seeking cannot fake a play. */
+    function trackPlayTime() {
+        var now = new Date().getTime();
+        if (state.lastTickAt && !el.audio.paused && now - state.lastTickAt < 2000) {
+            state.playedMs += now - state.lastTickAt;
+        }
+        state.lastTickAt = now;
+    }
+
+    /* A track counts as played after half its length (at most 4 minutes), per the Subsonic convention. */
+    function maybeScrobble() {
+        var duration, needed;
+        if (state.scrobbled || !state.currentSong || !state.client) {
+            return;
+        }
+        duration = seekerDuration();
+        needed = duration > 0 ? Math.max(10, Math.min(240, duration / 2)) : 60;
+        if (state.playedMs / 1000 >= needed) {
+            state.scrobbled = true;
+            state.client.scrobble(state.currentSong.id, true, new Date().getTime());
+        }
+    }
+
+    /* Write to the page only when the value changed. */
+    function setTextIf(node, text) {
+        if (node.__text !== text) {
+            node.__text = text;
+            node.innerHTML = text;
+        }
+    }
+
+    function setWidthIf(node, pct) {
+        var w = (Math.round(pct * 5) / 5) + '%';
+        if (node.__width !== w) {
+            node.__width = w;
+            node.style.width = w;
+        }
+    }
+
+    /* Back to 0:00, through the same helpers so their cache of what is on screen stays true. */
+    function resetSeekerDisplay() {
+        setWidthIf(el.seekFill, 0);
+        setTextIf(el.seekElapsed, '0:00');
+        setTextIf(el.seekTotal, '0:00');
+        setWidthIf(el.npSeekFill, 0);
+        setTextIf(el.npElapsed, '0:00');
+        setTextIf(el.npTotal, '0:00');
+    }
+
     function updateSeeker() {
         var audio = el.audio;
+        trackPlayTime();
+        maybeScrobble();
         var duration = seekerDuration();
         var pct = 0;
         var total = '0:00';
@@ -1686,14 +2491,14 @@
             }
             total = formatClock(duration);
         }
-        el.seekTotal.innerHTML = total;
-        el.seekElapsed.innerHTML = elapsed;
-        el.seekFill.style.width = pct + '%';
+        setTextIf(el.seekTotal, total);
+        setTextIf(el.seekElapsed, elapsed);
+        setWidthIf(el.seekFill, pct);
 
         /* The Now Playing screen mirrors the same state on its own bar. */
-        el.npTotal.innerHTML = total;
-        el.npElapsed.innerHTML = elapsed;
-        el.npSeekFill.style.width = pct + '%';
+        setTextIf(el.npTotal, total);
+        setTextIf(el.npElapsed, elapsed);
+        setWidthIf(el.npSeekFill, pct);
 
         updateNowSeeker();
     }
@@ -1731,8 +2536,23 @@
             '</svg>';
     }
 
+    /* The cover on Now Playing / AirPlay shrinks while paused and swells back on play. */
+    function setPausedClass(id, paused) {
+        var node = $(id);
+        if ((node.className.indexOf('paused') >= 0) === paused) {
+            return;
+        }
+        node.className = node.className.replace(/\s*paused\b/g, '') + (paused ? ' paused' : '');
+    }
+
     function setPlayIcon(playing) {
         var label = playing ? 'Pause' : 'Play';
+        /* The bar redraws every second; rebuilding two SVG buttons each time is pure waste. */
+        if (state.playIcon === playing) {
+            return;
+        }
+        state.playIcon = playing;
+        setPausedClass('screen-now', !playing);
         el.playBtn.innerHTML = playIconMarkup(playing);
         el.playBtn.setAttribute('aria-label', label);
         el.npPlay.innerHTML = playIconMarkup(playing);
@@ -1747,6 +2567,8 @@
         audio.addEventListener('loadedmetadata', updateSeeker, false);
 
         audio.addEventListener('play', function () {
+            /* A Subsonic track took over; stop listening to the AirPlay stream. */
+            AirPlay.release();
             setPlayIcon(true);
             setStatus('Playing.', false);
             startSeekerTimer();
@@ -1762,12 +2584,14 @@
         }, false);
 
         audio.addEventListener('playing', function () {
+            state.failStreak = 0;
             setStatus('Playing.', false);
             startSeekerTimer();
         }, false);
 
+        /* `stalled` fires during normal buffering; real failures arrive as `error`. */
         audio.addEventListener('stalled', function () {
-            setStatus('Stream stalled. Check the server.', true);
+            setStatus('Waiting for data ...', false);
         }, false);
 
         /*
@@ -1787,20 +2611,35 @@
                 reason = 'This stream format is not supported.';
             }
             setStatus(reason, true);
+            skipAfterError(reason);
             setPlayIcon(false);
             stopSeekerTimer();
-            el.seekFill.style.width = '0%';
-            el.seekElapsed.innerHTML = '0:00';
-            el.seekTotal.innerHTML = '0:00';
-            el.npSeekFill.style.width = '0%';
-            el.npElapsed.innerHTML = '0:00';
-            el.npTotal.innerHTML = '0:00';
+            resetSeekerDisplay();
         }, false);
 
         audio.addEventListener('ended', function () {
             stopSeekerTimer();
-            playNext();
+            playNext(true);
         }, false);
+    }
+
+    /*
+     * A track that cannot play should not stop the queue. Move on after a moment, but
+     * give up after a few failures in a row (server down, nothing will play) instead
+     * of cycling through the whole album.
+     */
+    function skipAfterError(reason) {
+        var failed = state.currentSong;
+        state.failStreak++;
+        if (state.failStreak >= MAX_FAIL_STREAK || !nextTrack(false)) {
+            return;
+        }
+        setStatus(reason + ' Skipping ...', true);
+        global.setTimeout(function () {
+            if (state.currentSong === failed && el.audio.error) {
+                playNext(false);
+            }
+        }, 1500);
     }
 
     /* ---------- Focus / D-pad ---------- */
@@ -1821,9 +2660,168 @@
      * off-screen. Tizen's WebKit does not scroll focused elements into view
      * reliably, so we do it explicitly.
      */
+    /*
+     * Scroll an element's scrollTop/scrollLeft to `to` with an ease-out instead of jumping.
+     * Each call replaces any animation already running on the same element and property,
+     * so holding an arrow key keeps retargeting smoothly. `from` lets the caller say where
+     * the scroll was before the browser's own focus scrolling moved it.
+     */
+    var SCROLL_MS = 280;
+    var SMOOTH_KEY = 'subtizen.smoothscroll';
+    var LITE_KEY = 'subtizen.lite';
+
+    /*
+     * A glide only helps if frames keep up. On a slow TV each step repaints a whole row of cards
+     * and the glide turns into stutter, so it measures itself: if the first steps arrive late, it
+     * switches itself off (and remembers that) and scrolling is instant again, as before.
+     */
+    var smoothScroll = true;
+    try {
+        smoothScroll = global.localStorage.getItem(SMOOTH_KEY) !== 'off';
+    } catch (e) {
+        smoothScroll = true;
+    }
+
+    /*
+     * Lite mode: when the device shows it cannot keep up, the optional motion goes (glide, background
+     * tint, art fades, entrance and flight animations) and the app behaves like the plain version.
+     * It is switched on by evidence (a stuttering scroll, or two slow list renders) and remembered.
+     * `localStorage.removeItem('subtizen.lite')` and reload turns the motion back on.
+     */
+    var lite = false;
+    var slowScore = 0;
+    try {
+        lite = global.localStorage.getItem(LITE_KEY) === 'on';
+    } catch (e2) {
+        lite = false;
+    }
+    if (lite) {
+        smoothScroll = false;
+    }
+
+    function enableLite() {
+        if (lite) {
+            return;
+        }
+        lite = true;
+        smoothScroll = false;
+        try {
+            global.localStorage.setItem(LITE_KEY, 'on');
+            global.localStorage.setItem(SMOOTH_KEY, 'off');
+        } catch (e) {
+            /* non-fatal */
+        }
+        setBodyFlag('lite', true);
+    }
+
+    function markSlow(weight) {
+        slowScore += weight;
+        if (slowScore >= 2) {
+            enableLite();
+        }
+    }
+
+    function disableSmoothScroll() {
+        markSlow(2);
+    }
+    var ROW_PAD = 36;                   /* matches `.grid { padding: ... 36px }` */
+
+    /*
+     * Timers, not requestAnimationFrame: frames are paused when the page is hidden and can be
+     * throttled by a TV's browser, which would leave a scroll stuck half-way. ~60 steps a
+     * second is smooth enough for a 280 ms glide.
+     */
+    function frameLater(fn) {
+        global.setTimeout(fn, 16);
+    }
+
+    function animateScroll(elm, prop, to, from) {
+        var key = '__anim_' + prop;
+        var start = new Date().getTime();
+        var token;
+
+        if (typeof from !== 'number') {
+            from = elm[prop];
+        }
+        to = Math.round(to);
+        if (!smoothScroll) {
+            elm[prop] = to;
+            return;
+        }
+        if (Math.abs(to - from) < 2) {
+            /*
+             * Nothing to scroll for this focus. If an earlier move is still gliding, leave it
+             * alone (a Left/Right press must not freeze a vertical scroll half-way).
+             */
+            if (!elm[key + '_on']) {
+                elm[prop] = to;
+            }
+            return;
+        }
+
+        elm[key] = (elm[key] || 0) + 1;
+        token = elm[key];
+        elm[key + '_on'] = true;
+        elm[prop] = from;
+
+        /* Whatever happens to the stepping, the scroll always ends exactly on target. */
+        global.setTimeout(function () {
+            if (elm[key] === token && elm[key + '_on']) {
+                elm[prop] = to;
+                elm[key + '_on'] = false;
+            }
+        }, SCROLL_MS + 90);
+
+        var steps = 0, late = 0, lastAt = start;
+
+        function frame() {
+            var t, eased, now;
+            if (elm[key] !== token) {
+                return;                 /* a newer scroll took over */
+            }
+            now = new Date().getTime();
+            if (steps > 0 && now - lastAt > 45) {
+                late++;
+            }
+            lastAt = now;
+            steps++;
+            if (steps >= 4 && late >= 3) {
+                /* Under ~22 frames a second: give up on gliding on this device. */
+                disableSmoothScroll();
+                elm[prop] = to;
+                elm[key + '_on'] = false;
+                return;
+            }
+            t = Math.min(1, (now - start) / SCROLL_MS);
+            eased = 1 - Math.pow(1 - t, 3);
+            elm[prop] = Math.round(from + (to - from) * eased);
+            if (t < 1) {
+                frameLater(frame);
+            } else {
+                elm[key + '_on'] = false;
+            }
+        }
+        frame();
+    }
+
+    function revealInScreen(node, screen) {
+        var r = node.getBoundingClientRect();
+        var s = screen.getBoundingClientRect();
+        var margin = 20;
+        var delta = 0;
+
+        if (r.top < s.top + margin) {
+            delta = r.top - (s.top + margin);
+        } else if (r.bottom > s.bottom - margin) {
+            delta = r.bottom - (s.bottom - margin);
+        }
+        if (delta) {
+            screen.scrollTop += delta;
+        }
+    }
+
     function focusNode(node) {
         var screen = node.parentNode;
-        var top, bottom, viewTop, viewBottom;
         var row, rowScrollBefore;
 
         /*
@@ -1836,18 +2834,19 @@
         rowScrollBefore = (row && row.className && row.className.indexOf('grid') >= 0)
             ? row.scrollLeft : 0;
 
-        node.focus();
-
         /*
          * Walk up by parentNode, not offsetParent: `.screen` is not positioned,
          * so it is never an offsetParent, and the chain from a card reaches
          * `#app` (whose own offsetParent is null) without ever passing through
-         * the screen.
+         * the screen. Found before focusing so its scroll position can be recorded.
          */
         while (screen && (!screen.className ||
                 screen.className.indexOf('screen') < 0)) {
             screen = screen.parentNode;
         }
+        node.focus();
+        rememberRowPosition(node);
+
         if (!screen || !screen.className) {
             return;
         }
@@ -1859,16 +2858,17 @@
          */
         screen.scrollLeft = 0;
 
-        top = node.offsetTop;
-        bottom = top + node.offsetHeight;
-        viewTop = screen.scrollTop;
-        viewBottom = viewTop + screen.clientHeight;
-
-        if (top < viewTop) {
-            screen.scrollTop = top - 20;
-        } else if (bottom > viewBottom) {
-            screen.scrollTop = bottom - screen.clientHeight + 20;
-        }
+        /*
+         * Keep the focused element inside the screen with a 20 px margin, judged from where it
+         * actually is now (after whatever scrolling the browser did itself). That makes the result
+         * the same whichever of us scrolled first, and running it twice changes nothing, so the
+         * list cannot be pushed one way by us and pulled back by the browser. It runs again on the
+         * next tick for engines that do their own focus scrolling after this function returns.
+         */
+        revealInScreen(node, screen);
+        global.setTimeout(function () {
+            revealInScreen(node, screen);
+        }, 0);
 
         /* Scroll only the row the focused card belongs to. */
         row = node.parentNode;
@@ -1885,7 +2885,7 @@
          *
          * The target is derived from the card's index and layout width rather
          * than from getBoundingClientRect(), because the painted box has
-         * already been shifted by the browser's scroll and is scaled 6% while
+         * already been shifted by the browser's scroll and is scaled while
          * focused. Index arithmetic is immune to both.
          */
         var cards = gridOf(node);
@@ -1897,7 +2897,8 @@
         /* Matches `.card { margin: 0 26px 0 0 }`. */
         var gap = 26;
         var step = cardW + gap;
-        var rowLeft = index * step;
+        /* The row has ROW_PAD of padding before its first card, so a card sits ROW_PAD further in. */
+        var rowLeft = ROW_PAD + index * step;
         var rowRight = rowLeft + cardW;
 
         function applyRowScroll() {
@@ -1909,15 +2910,17 @@
              */
             var rowViewLeft = rowScrollBefore;
             var rowViewRight = rowViewLeft + row.clientWidth;
+            var to;
 
-            if (rowLeft < rowViewLeft) {
-                row.scrollLeft = Math.max(0, rowLeft - 20);
-            } else if (rowRight > rowViewRight) {
+            if (rowLeft < rowViewLeft + 20) {
+                to = Math.max(0, rowLeft - ROW_PAD);
+            } else if (rowRight > rowViewRight - 20) {
                 /* Scroll just far enough to reveal the card, not a page. */
-                row.scrollLeft = rowRight - row.clientWidth + 20;
+                to = rowRight - row.clientWidth + ROW_PAD;
             } else {
-                row.scrollLeft = rowViewLeft;
+                to = rowViewLeft;
             }
+            animateScroll(row, 'scrollLeft', to, rowViewLeft);
         }
 
         row.scrollLeft = rowScrollBefore;
@@ -1943,11 +2946,12 @@
 
     /* Slide the row the focus just landed on, in the direction of travel. */
     function animateRow(node, delta) {
-        var list = node && node.parentNode;
-        if (!list || !list.className || list.className.indexOf('grid') < 0) {
-            return;
-        }
-        replayAnimation(list, delta > 0 ? 'row-in-down' : 'row-in-up');
+        /*
+         * Used to slide the whole row in (opacity + transform on a container holding every card and its
+         * shadow), which is among the most expensive things the page did when moving between rows. The
+         * focus transform on the card itself is all the motion that move needs.
+         */
+        return;
     }
 
     function focusables() {
@@ -1960,8 +2964,12 @@
     }
 
     function focusFirst() {
-        var nodes = focusables();
-        var i;
+        var nodes, i;
+        if ($('screen-now').className.indexOf('active') >= 0 && el.npPlay) {
+            focusNode(el.npPlay);           /* the first button is now Shuffle; start on Play */
+            return;
+        }
+        nodes = focusables();
         /* Prefer content over chrome so the D-pad starts on the grid. */
         for (i = 0; i < nodes.length; i++) {
             if (nodes[i].className.indexOf('card') >= 0 ||
@@ -2032,7 +3040,7 @@
         target = index + delta;
         if (target >= 0 && target < cards.length) {
             focusNode(cards[target]);
-            if (delta > 0 && target >= cards.length - 2) {
+            if (delta > 0 && target >= cards.length - PREFETCH_AHEAD) {
                 loadMore(cards[target].getAttribute('data-list'));
             }
         }
@@ -2063,10 +3071,23 @@
      * the horizontal position to preserve across the handoff, so moving down
      * from the 4th card of one row lands on the 4th card of the next.
      */
+    /*
+     * Each row keeps its own place. Going down from one row and back up used to put focus on the
+     * same *column* of the row above rather than on the card you had been at, so browsing a few
+     * cards in the next row and returning lost your position.
+     */
+    function rememberRowPosition(node) {
+        var list = node.getAttribute ? node.getAttribute('data-list') : null;
+        var index = node.getAttribute ? parseInt(node.getAttribute('data-index'), 10) : NaN;
+        if (list && !isNaN(index)) {
+            state.rowMemory[list] = index;
+        }
+    }
+
     function neighbourGrid(currentList, delta, column) {
-        var lists = ['recent', 'added', 'top'];
+        var lists = SECTION_ORDER;
         var pos = -1;
-        var i, cards, index;
+        var i, cards, index, remembered;
         if (currentList === null) {
             /* Coming down from the nav bar: land on the first section. */
             pos = delta > 0 ? -1 : lists.length;
@@ -2081,24 +3102,37 @@
                 return null;
             }
         }
+        /* Rows with no cards (hidden because empty) are skipped, not treated as the end. */
         pos += delta;
-        if (pos < 0 || pos >= lists.length) {
-            return null;
+        while (pos >= 0 && pos < lists.length) {
+            cards = visible(document.querySelectorAll(
+                '.screen.active .card[data-list="' + lists[pos] + '"]'
+            ));
+            if (cards.length) {
+                /* A row you have been in before comes back at the card you left it on. */
+                remembered = state.rowMemory[lists[pos]];
+                if (typeof remembered === 'number' && cards[remembered]) {
+                    return [cards[remembered]];
+                }
+                if (typeof column === 'number' && column > 0) {
+                    index = column < cards.length ? column : cards.length - 1;
+                    return [cards[index]];
+                }
+                return cards;
+            }
+            pos += delta;
         }
-        cards = visible(document.querySelectorAll(
-            '.screen.active .card[data-list="' + lists[pos] + '"]'
-        ));
-        if (!cards.length) {
-            return null;
-        }
-        if (typeof column === 'number' && column > 0) {
-            index = column < cards.length ? column : cards.length - 1;
-            return [cards[index]];
-        }
-        return cards;
+        return null;
     }
 
     /* The nav bar buttons, in visual order, for the Up handoff. */
+    /* Tabs, the avatar and the theme button are all `.tab` buttons inside #nav. */
+    function isNavControl(node) {
+        return !!(node && node.className && /(^|\s)tab(\s|$)/.test(node.className) &&
+            node.parentNode && (node.parentNode.id === 'nav' ||
+            (node.parentNode.parentNode && node.parentNode.parentNode.id === 'nav')));
+    }
+
     function navFocusables() {
         return visible(document.querySelectorAll('#nav .tab'));
     }
@@ -2180,10 +3214,37 @@
         return visible(el.artistIndex.querySelectorAll('.index-letter'));
     }
 
+    /*
+     * The row next to the focused one, found directly. The lists can be hundreds of rows long, and
+     * scanning every row (and reading each one's layout) on every key press was a cost the keys
+     * should not pay. Returns null when `node` is not a row of `list` or there is no neighbour.
+     */
+    function neighbourRow(node, list, delta) {
+        var sib;
+        if (!node || node.parentNode !== list) {
+            return undefined;
+        }
+        sib = delta > 0 ? node.nextElementSibling : node.previousElementSibling;
+        return sib && sib.tabIndex >= 0 ? sib : null;
+    }
+
     function moveArtistList(delta) {
-        var rows = artistRows();
-        var index = indexIn(rows, document.activeElement);
-        var target;
+        var next = neighbourRow(document.activeElement, el.artistList, delta);
+        var rows, index, target;
+
+        if (next) {
+            focusNode(next);
+            return;
+        }
+        if (next === null) {
+            if (delta < 0) {
+                /* Above the first artist is the A-Z strip. */
+                focusArtistIndex();
+            }
+            return;
+        }
+        rows = artistRows();
+        index = indexIn(rows, document.activeElement);
 
         if (!rows.length) {
             return;
@@ -2232,9 +3293,22 @@
     }
 
     function movePlaylistList(delta) {
-        var rows = playlistRows();
-        var index = indexIn(rows, document.activeElement);
-        var target;
+        var next = neighbourRow(document.activeElement, el.playlistList, delta);
+        var rows, index, target;
+
+        if (next) {
+            focusNode(next);
+            return;
+        }
+        if (next === null) {
+            if (delta < 0) {
+                /* Above the first playlist is the nav bar. */
+                focusNav();
+            }
+            return;
+        }
+        rows = playlistRows();
+        index = indexIn(rows, document.activeElement);
 
         if (!rows.length) {
             return;
@@ -2258,9 +3332,18 @@
      * the header, so the D-pad could leave the list and land on chrome.
      */
     function movePlaylistTracks(delta) {
-        var rows = visible(el.playlistSongs.querySelectorAll('.track'));
-        var index = indexIn(rows, document.activeElement);
-        var target;
+        var next = neighbourRow(document.activeElement, el.playlistSongs, delta);
+        var rows, index, target;
+
+        if (next) {
+            focusNode(next);
+            return;
+        }
+        if (next === null) {
+            return;
+        }
+        rows = visible(el.playlistSongs.querySelectorAll('.track'));
+        index = indexIn(rows, document.activeElement);
 
         if (!rows.length) {
             return;
@@ -2291,6 +3374,24 @@
 
     function focusNav() {
         var nodes = navFocusables();
+        var i;
+        /*
+         * Land on the tab for the screen the user is on, so going up from Search
+         * reaches Search and Left/Right walk away from there. Fall back to the first
+         * real tab (the avatar, for settings, sits one step left of it).
+         */
+        for (i = 0; i < nodes.length; i++) {
+            if (nodes[i].getAttribute('data-tab') && nodes[i].className.indexOf('active') >= 0) {
+                focusNode(nodes[i]);
+                return true;
+            }
+        }
+        for (i = 0; i < nodes.length; i++) {
+            if (nodes[i].getAttribute('data-tab')) {
+                focusNode(nodes[i]);
+                return true;
+            }
+        }
         if (nodes.length) {
             focusNode(nodes[0]);
             return true;
@@ -2300,7 +3401,7 @@
 
     /* Walk the Now Playing transport buttons, wrapping at the ends. */
     function moveNowActions(delta) {
-        var nodes = [el.npPrev, el.npPlay, el.npNext];
+        var nodes = [el.npShuffle, el.npPrev, el.npPlay, el.npNext, el.npRepeat];
         var index = indexIn(nodes, document.activeElement);
         if (index < 0) {
             focusNode(el.npPlay);
@@ -2435,7 +3536,7 @@
         if (key === 'artist') {
             item = state.artistAlbums[indexOfNode(card)];
             if (item) {
-                openAlbum(item, 'screen-artist');
+                openAlbum(item, 'screen-artist', card);
             }
             return;
         }
@@ -2447,7 +3548,7 @@
         if (SECTIONS[key].kind === 'song') {
             openSong(item);
         } else {
-            openAlbum(item);
+            openAlbum(item, undefined, card);
         }
     }
 
@@ -2456,7 +3557,7 @@
         document.addEventListener('keydown', function (event) {
             var key = event.keyCode;
             var target = document.activeElement;
-            var cards, next;
+            var cards, next, rowsQ, idxQ;
 
             /*
              * A list handler already acted on this keypress. Activating a card
@@ -2465,6 +3566,30 @@
              */
             if (event.__subtizenHandled) {
                 return;
+            }
+
+            /*
+             * The nav bar behaves the same on every screen. Each screen below walks its
+             * own content with the arrow keys (the search keyboard, the A-Z strip, ...) and
+             * used to take Left/Right/Up while a tab was focused, which threw focus back into
+             * the content or onto the first tab. Left/Right move along the bar and Up stays;
+             * Down and Back are still decided by the screen.
+             */
+            if (isNavControl(target)) {
+                if (key === 37 || key === 39) {
+                    event.preventDefault();
+                    moveNav(key === 39 ? 1 : -1);
+                    return;
+                }
+                if (key === 38) {
+                    event.preventDefault();
+                    return;
+                }
+                if (key === 13 || key === 29443) {
+                    event.preventDefault();
+                    target.click();
+                    return;
+                }
             }
 
             /*
@@ -2501,33 +3626,113 @@
             }
 
             /*
-             * The Now Playing screen carries its own transport buttons, so the
-             * D-pad walks them and Up hands off to the nav bar. Back steps out
-             * of the buttons first, then leaves the screen.
+             * The connect form doubles as the settings screen once connected.
+             * Up/Down walk the fields, and Back returns to where it came from.
              */
-            if ($('screen-now').className.indexOf('active') >= 0) {
+            if ($('screen-connect').className.indexOf('active') >= 0 && state.client) {
+                if (key === 10009 || key === 461) {
+                    event.preventDefault();
+                    closeSettings();
+                    return;
+                }
+            }
+
+            /*
+             * The AirPlay screen has a single button (mute/unmute the stream),
+             * so the D-pad mostly moves between it and the nav bar.
+             */
+            if ($('screen-airplay').className.indexOf('active') >= 0) {
                 if (key === 37 || key === 39) {
                     event.preventDefault();
                     if (target && target.className.indexOf('tab') >= 0) {
-                        /* Walk along the nav bar, not the transport buttons. */
                         moveNav(key === 39 ? 1 : -1);
-                    } else {
-                        moveNowActions(key === 39 ? 1 : -1);
                     }
                 } else if (key === 38) {
                     event.preventDefault();
                     focusNav();
                 } else if (key === 40) {
                     event.preventDefault();
-                    focusNode(el.npPlay);
+                    focusNode(el.apPlay);
                 } else if (key === 13 || key === 29443) {
-                    if (target && target.className.indexOf('np-') >= 0) {
+                    if (target && target.tagName === 'BUTTON') {
                         event.preventDefault();
                         target.click();
                     }
                 } else if (key === 10009 || key === 461) {
                     event.preventDefault();
-                    if (target && target.className.indexOf('np-') >= 0) {
+                    if (target && target.id === 'ap-play') {
+                        focusNav();
+                    } else {
+                        show('screen-albums');
+                    }
+                }
+                return;
+            }
+
+            /*
+             * The Now Playing screen carries its own transport buttons, so the
+             * D-pad walks them and Up hands off to the nav bar. Back steps out
+             * of the buttons first, then leaves the screen.
+             */
+            if ($('screen-now').className.indexOf('active') >= 0) {
+                /* Up Next list: Up/Down walk it, Enter plays a track, Back closes it. */
+                if (target && target.className.indexOf('queue-row') >= 0) {
+                    rowsQ = queueRows();
+                    idxQ = indexIn(rowsQ, target);
+                    if (key === 38 || key === 40) {
+                        event.preventDefault();
+                        if (key === 38 && idxQ === 0) {
+                            focusNode(el.npQueue);
+                        } else if (rowsQ[idxQ + (key === 40 ? 1 : -1)]) {
+                            focusNode(rowsQ[idxQ + (key === 40 ? 1 : -1)]);
+                        }
+                    } else if (key === 13 || key === 29443) {
+                        event.preventDefault();
+                        playQueueRow(target);
+                    } else if (key === 10009 || key === 461) {
+                        event.preventDefault();
+                        toggleQueue(false);
+                        focusNode(el.npQueue);
+                    }
+                    return;
+                }
+                /* Favorite and Up Next sit in a row under the cover, above the transport buttons. */
+                if (isNowExtra(target)) {
+                    event.preventDefault();
+                    if (key === 37 || key === 39) {
+                        focusNode(target === el.npFav ? el.npQueue : el.npFav);
+                    } else if (key === 38 || key === 10009 || key === 461) {
+                        focusNav();
+                    } else if (key === 40) {
+                        if (target === el.npQueue && queueOpen() && queueRows().length) {
+                            focusNode(queueRows()[0]);
+                        } else {
+                            focusNode(el.npPlay);
+                        }
+                    } else if (key === 13 || key === 29443) {
+                        target.click();
+                    }
+                    return;
+                }
+                if (key === 37 || key === 39) {
+                    event.preventDefault();
+                    moveNowActions(key === 39 ? 1 : -1);
+                } else if (key === 38) {
+                    event.preventDefault();
+                    focusNode(el.npFav);
+                } else if (key === 40) {
+                    event.preventDefault();
+                    if (!isNowAction(target)) {
+                        focusNode(el.npPlay);
+                    }
+                } else if (key === 13 || key === 29443) {
+                    if (target && isNowAction(target)) {
+                        event.preventDefault();
+                        target.click();
+                    }
+                } else if (key === 10009 || key === 461) {
+                    event.preventDefault();
+                    if (target && isNowAction(target)) {
                         /* Back out of the buttons to the nav bar. */
                         focusNav();
                     } else {
@@ -2546,7 +3751,12 @@
             if ($('screen-artists').className.indexOf('active') >= 0) {
                 if (key === 38 || key === 40) {
                     event.preventDefault();
-                    moveArtistList(key === 40 ? 1 : -1);
+                    if (key === 38 && target && target.className.indexOf('index-letter') >= 0) {
+                        /* Up from the A-Z strip reaches the nav bar (it used to jump into the list). */
+                        focusNav();
+                    } else {
+                        moveArtistList(key === 40 ? 1 : -1);
+                    }
                 } else if (key === 37 || key === 39) {
                     event.preventDefault();
                     moveArtistIndex(key === 39 ? 1 : -1);
@@ -2564,6 +3774,9 @@
                     if (target && target.className.indexOf('artist') >= 0) {
                         /* Back out of the list to the A-Z strip. */
                         focusArtistIndex();
+                    } else if (target && target.className.indexOf('index-letter') >= 0) {
+                        /* ... and out of the strip to the nav bar, as on the other screens. */
+                        focusNav();
                     } else {
                         show('screen-albums');
                     }
@@ -2680,6 +3893,8 @@
                             }
                         }
                     }
+                } else if ((next = neighbourRow(target, el.songList, key === 40 ? 1 : -1))) {
+                    focusNode(next);
                 } else {
                     moveFocus(key === 40 ? 1 : -1);
                 }
@@ -2703,7 +3918,7 @@
             } else if (key === 10009 || key === 461) { /* Back / Return */
                 event.preventDefault();
                 if ($('screen-album').className.indexOf('active') >= 0) {
-                    show(state.albumReturn);
+                    leaveAlbum();
                 } else if (target && target.className.indexOf('tab') >= 0) {
                     /* Back out of the nav bar to wherever the D-pad was. */
                     if (!restoreGridFocus()) {
@@ -2716,7 +3931,15 @@
 
     /* ---------- Media keys ---------- */
 
+    function airplayOwnsPlayback() {
+        return airplaySourceActive();
+    }
+
     function togglePlayPause() {
+        if (airplayOwnsPlayback()) {
+            AirPlay.toggle();
+            return;
+        }
         if (!el.audio.src) {
             return;
         }
@@ -2835,6 +4058,20 @@
             }
             event.preventDefault();
 
+            /*
+             * While an AirPlay cast owns the audio, play/pause/stop mute and
+             * unmute the stream on the TV. Skipping and seeking belong to the
+             * phone, so those keys are ignored rather than moving the album
+             * queue underneath the cast.
+             */
+            if (airplayOwnsPlayback()) {
+                if (action === 'play' || action === 'pause' ||
+                        action === 'toggle' || action === 'stop') {
+                    AirPlay.toggle();
+                }
+                return;
+            }
+
             switch (action) {
             case 'play':
                 if (el.audio.src) {
@@ -2930,6 +4167,314 @@
         }, false);
     }
 
+    /* ---------- Player bar ---------- */
+
+    function setBodyFlag(name, on) {
+        var has = (' ' + document.body.className + ' ').indexOf(' ' + name + ' ') >= 0;
+        if (has === on) {
+            return;                       /* rewriting the class would restyle the whole page */
+        }
+        document.body.className = document.body.className
+            .replace(new RegExp('(^|\\s)' + name + '(?=\\s|$)', 'g'), '') + (on ? ' ' + name : '');
+    }
+
+    function setClassIf(node, cls) {
+        if (node.className !== cls) {
+            node.className = cls;
+        }
+    }
+
+    /* True while an AirPlay cast is the thing playing on the TV (not displaced by a Subsonic track). */
+    function airplaySourceActive() {
+        var snap = AirPlay.snapshot();
+        return !!(snap.reachable && snap.status && snap.status.state !== 'idle' && !snap.suppressed);
+    }
+
+    function setBarArt(url) {
+        if (url) {
+            el.npArt.className = el.npArt.className.replace(/\s*empty\b/g, '');
+            setCoverImage(el.npArt, url);
+        } else {
+            el.npArt.className = 'np-art empty';
+            setCoverImage(el.npArt, '');
+        }
+    }
+
+    /*
+     * The player bar shows whichever source is playing: a Subsonic track, or an AirPlay
+     * cast (tagged "AirPlay", with the skip buttons dimmed because the phone controls the
+     * queue). It is hidden entirely until something has played or is being cast.
+     */
+    function renderBar() {
+        var casting = airplaySourceActive();
+        var snap, s, song, dur, pos, sig, tab, art;
+
+        state.casting = casting;
+        tab = $('tab-airplay');
+        if (tab && (tab.className.indexOf('casting') >= 0) !== casting) {
+            tab.className = tab.className.replace(/\s*casting\b/g, '') + (casting ? ' casting' : '');
+        }
+        setBodyFlag('no-player', !casting && !state.currentSong);
+        setClassIf($('btn-prev'), casting ? 'disabled' : '');
+        setClassIf($('btn-next'), casting ? 'disabled' : '');
+
+        if (casting) {
+            snap = AirPlay.snapshot();
+            s = snap.status;
+            art = AirPlay.coverUrl();
+            sig = 'a|' + s.title + '|' + s.artist + '|' + art;
+            if (sig !== state.barSig) {
+                state.barSig = sig;
+                el.nowPlaying.innerHTML = escapeHtml(s.title || 'AirPlay') +
+                    '<span class="np-artist"><b class="np-tag">AirPlay</b>' +
+                    escapeHtml(s.artist || s.client || '') + '</span>';
+                setBarArt(art);
+            }
+            setPlayIcon(snap.streaming);
+            dur = s.duration || 0;
+            pos = dur ? AirPlay.position() : 0;
+            setTextIf(el.seekElapsed, formatDuration(pos));
+            setTextIf(el.seekTotal, formatDuration(dur));
+            setWidthIf(el.seekFill, dur ? Math.min(100, pos / dur * 100) : 0);
+            return;
+        }
+
+        song = state.currentSong;
+        sig = 's|' + (song ? song.id : '');
+        if (sig !== state.barSig) {
+            state.barSig = sig;
+            if (song) {
+                el.nowPlaying.innerHTML = escapeHtml(song.title) +
+                    '<span class="np-artist">' + escapeHtml(song.artist) + '</span>';
+                setBarArt(song.coverArt && state.client ?
+                    state.client.coverArtUrl(song.coverArt, NP_ART_SIZE) : '');
+            } else {
+                el.nowPlaying.innerHTML = 'Nothing playing';
+                setBarArt('');
+            }
+        }
+        if (song) {
+            setPlayIcon(!el.audio.paused);
+            updateSeeker();
+        }
+    }
+
+    /* ---------- Connection settings ---------- */
+
+    /*
+     * The avatar in the nav bar reopens the connect form, pre-filled, so the
+     * server and the AirPlay bridge address can be changed after first setup.
+     * Cancel / Back return to the screen the user came from.
+     */
+    function activeScreenId() {
+        var node = document.querySelector('.screen.active');
+        return node ? node.id : 'screen-albums';
+    }
+
+    function openSettings() {
+        var saved = loadConnection();
+        if (!state.client || activeScreenId() === 'screen-connect') {
+            return;
+        }
+        if (saved) {
+            $('server-url').value = saved.url || '';
+            $('username').value = saved.user || '';
+            $('password').value = saved.pass || '';
+            $('bridge-url').value = saved.bridge || '';
+        }
+        state.settingsReturn = activeScreenId();
+        $('connect-hint').innerHTML = 'Connection settings';
+        $('btn-connect').innerHTML = 'Save';
+        $('btn-cancel').className = '';
+        show('screen-connect');
+    }
+
+    function resetSettingsForm() {
+        $('connect-hint').innerHTML = 'Connect to your Subsonic server';
+        $('btn-connect').innerHTML = 'Connect';
+        $('btn-cancel').className = 'hidden';
+    }
+
+    function closeSettings(returnTo) {
+        resetSettingsForm();
+        show(returnTo || state.settingsReturn || 'screen-albums');
+    }
+
+    /*
+     * Submitting the form. If only the bridge address changed there is no need
+     * to log in again (and a server that is down must not block fixing the
+     * bridge), so the new address is just saved and applied.
+     */
+    function submitConnection() {
+        var url = $('server-url').value.trim();
+        var user = $('username').value.trim();
+        var pass = $('password').value;
+        var bridge = $('bridge-url').value.trim();
+        var saved = loadConnection();
+
+        if (state.client && saved && saved.url === url &&
+                saved.user === user && saved.pass === pass) {
+            saveConnection({ url: url, user: user, pass: pass, bridge: bridge, auth: saved.auth });
+            AirPlay.configure(bridge, url);
+            AirPlay.start();
+            closeSettings('screen-airplay');
+            selectTab('airplay');
+            renderAirPlay();
+            AirPlay.poll();
+            setStatus('AirPlay bridge saved.', false);
+            return;
+        }
+        /* Stay on the form until the new server answers, so a typo is fixable. */
+        connect(url, user, pass, bridge);
+    }
+
+    /* ---------- AirPlay ---------- */
+
+    /*
+     * Audio, metadata and cover art come from the SubTizen bridge (see
+     * /bridge and airplay.js); this section only draws them. The screen reuses
+     * the Now Playing stage layout so a cast looks like any other track.
+     */
+    var airplayTint = null;
+    var airplayCover = '';
+    var airplayTintSeq = 0;
+
+    function setAirPlayCover(url) {
+        var img;
+        var seq = ++airplayTintSeq;
+
+        if (url === airplayCover) {
+            return;
+        }
+        airplayCover = url;
+        airplayTint = null;
+
+        if (!url) {
+            el.apCover.className = 'np-cover empty';
+            setCoverImage(el.apCover, '');
+            if ($('screen-airplay').className.indexOf('active') >= 0) {
+                applyNowTint(null);
+            }
+            return;
+        }
+
+        el.apCover.className = el.apCover.className.replace(/\s*empty\b/g, '');
+        setCoverImage(el.apCover, url);
+
+        img = new Image();
+        /* The bridge sends CORS headers, which lets the canvas read pixels. */
+        img.crossOrigin = 'anonymous';
+        img.onload = function () {
+            if (seq !== airplayTintSeq) {
+                return;
+            }
+            airplayTint = tintFromImage(img);
+            if ($('screen-airplay').className.indexOf('active') >= 0) {
+                applyNowTint(airplayTint, 'screen-airplay');
+            }
+        };
+        img.src = url;
+    }
+
+    function updateAirPlaySeek() {
+        var snap, s, pos, dur;
+        if ($('screen-airplay').className.indexOf('active') < 0) {
+            return;
+        }
+        snap = AirPlay.snapshot();
+        s = snap.status;
+        dur = s && s.duration ? s.duration : 0;
+        pos = dur ? AirPlay.position() : 0;
+        el.apElapsed.innerHTML = formatDuration(pos);
+        el.apTotal.innerHTML = formatDuration(dur);
+        el.apSeekFill.style.width = (dur ? Math.min(100, pos / dur * 100) : 0) + '%';
+    }
+
+    function renderAirPlay() {
+        var snap = AirPlay.snapshot();
+        var s = snap.status;
+        var sig = [snap.base, snap.reachable, snap.streaming, snap.muted, snap.mode,
+                   s ? [s.state, s.title, s.artist, s.album, s.client, s.cover].join('|') : '',
+                   snap.mode === 'webaudio' ? Math.round(snap.bufferAhead * 4) : ''].join('~');
+
+        /* This runs on every poll and every second; rebuilding the screen for an identical state is waste. */
+        if (sig === state.apSig) {
+            updateAirPlaySeek();
+            renderBar();
+            return;
+        }
+        state.apSig = sig;
+        var live = snap.reachable && s && s.state !== 'idle';
+        var headline, hint, label;
+
+        if (!snap.base) {
+            headline = 'No AirPlay bridge';
+            hint = 'Add the bridge address on the connect screen.';
+        } else if (!snap.reachable) {
+            headline = 'Bridge not reachable';
+            hint = 'Could not reach ' + snap.base + '. Is subtizen-bridge running?';
+        } else if (!live) {
+            headline = 'Ready for AirPlay';
+            hint = 'Choose \u201C' + (s && s.name ? s.name : 'SubTizen') +
+                '\u201D in the AirPlay menu on your iPhone, iPad or Mac.';
+        } else if (snap.muted) {
+            headline = 'Muted on TV';
+            hint = 'Press play to listen again.';
+        } else {
+            headline = s.state === 'paused' ?
+                (s.title ? 'Paused' : 'Connected' + (s.client ? ' to ' + s.client : '')) :
+                (s.client ? 'Playing from ' + s.client : 'AirPlay');
+            /* Shows how far behind the phone the TV's player is running. */
+            hint = !snap.streaming ? '' :
+                (snap.mode === 'webaudio' ?
+                    'Low-latency player, delay ' + Math.round(snap.bufferAhead * 1000) + ' ms' :
+                    (snap.mode === 'avplay' ?
+                        'Samsung AVPlay player' + (snap.avInfo ? ' (' + snap.avInfo + ')' : '') :
+                        'Standard player (' + snap.probe + ')'));
+        }
+        el.apHeadline.innerHTML = escapeHtml(headline);
+        el.apHint.innerHTML = escapeHtml(hint);
+
+        el.apTitle.innerHTML = live ? escapeHtml(s.title) : '';
+        el.apArtist.innerHTML = live ? escapeHtml(s.artist) : '';
+        el.apAlbum.innerHTML = live ? escapeHtml(s.album) : '';
+        setAirPlayCover(live ? AirPlay.coverUrl() : '');
+
+        label = snap.streaming ? 'Pause' : 'Play';
+        el.apPlay.innerHTML = playIconMarkup(snap.streaming);
+        el.apPlay.setAttribute('aria-label', label);
+        updateAirPlaySeek();
+        setPausedClass('screen-airplay', !snap.streaming);
+        renderBar();
+    }
+
+    function bindAirPlay() {
+        AirPlay.bindAudio($('audio-airplay'));
+
+        AirPlay.on('begin', function (snap) {
+            /* Casting is a deliberate act, so it takes over from the queue. */
+            el.audio.pause();
+            selectTab('airplay');
+            renderAirPlay();
+            show('screen-airplay');
+            setStatus('AirPlay' + (snap.status && snap.status.client ?
+                ' from ' + snap.status.client : '') + '.', false);
+        });
+        AirPlay.on('end', function () {
+            setStatus('AirPlay ended.', false);
+        });
+        AirPlay.on('update', renderAirPlay);
+
+        el.apPlay.addEventListener('click', function () {
+            AirPlay.toggle();
+        }, false);
+
+        global.setInterval(function () {
+            updateAirPlaySeek();
+            renderBar();
+        }, 1000);
+    }
+
     /* ---------- Nav tabs ---------- */
 
     function selectTab(tab) {
@@ -2940,7 +4485,8 @@
                 continue;   /* the theme toggle is not a tab */
             }
             tabs[i].className = 'tab' +
-                (tabs[i].getAttribute('data-tab') === tab ? ' active' : '');
+                (tabs[i].getAttribute('data-tab') === tab ? ' active' : '') +
+                (tabs[i].getAttribute('data-tab') === 'airplay' && state.casting ? ' casting' : '');
         }
     }
 
@@ -2956,7 +4502,17 @@
                 selectTab(tab);
                 if (tab === 'albums') {
                     if (state.client) {
-                        loadHome();
+                        /*
+                         * Coming back to Albums need not refetch the whole library each
+                         * time; reload only when it is stale or was never loaded.
+                         */
+                        if (state.homeLoadedAt &&
+                                new Date().getTime() - state.homeLoadedAt < HOME_REFRESH_MS) {
+                            show('screen-albums');
+                            refreshRecent();
+                        } else {
+                            loadHome();
+                        }
                     }
                 } else if (tab === 'artists') {
                     if (state.client) {
@@ -2973,6 +4529,10 @@
                         show('screen-search');
                         openSearch();
                     }
+                } else if (tab === 'airplay') {
+                    renderAirPlay();
+                    show('screen-airplay');
+                    AirPlay.poll();
                 } else if (tab === 'now') {
                     renderNowPlaying();
                     updateSeeker();
@@ -3029,6 +4589,7 @@
         el.songList = $('song-list');
         el.albumTitle = $('album-title');
         el.albumArtist = $('album-artist');
+        el.albumCover = $('album-cover');
         el.nowPlaying = $('now-playing');
         el.npArt = $('np-art');
         el.audio = $('audio');
@@ -3057,22 +4618,34 @@
         el.npSeekFill = $('np-seek-fill');
         el.npElapsed = $('np-elapsed');
         el.npTotal = $('np-total');
+        el.npFav = $('np-fav');
+        el.npQueue = $('np-queue');
+        el.npShuffle = $('np-shuffle');
+        el.npRepeat = $('np-repeat');
         el.npPrev = $('np-prev');
         el.npPlay = $('np-play');
         el.npNext = $('np-next');
+        el.apCover = $('ap-cover');
+        el.apHeadline = $('ap-headline');
+        el.apHint = $('ap-hint');
+        el.apTitle = $('ap-title');
+        el.apArtist = $('ap-artist');
+        el.apAlbum = $('ap-album');
+        el.apElapsed = $('ap-elapsed');
+        el.apTotal = $('ap-total');
+        el.apSeekFill = $('ap-seek-fill');
+        el.apPlay = $('ap-play');
 
         $('connect-form').addEventListener('submit', function (event) {
             event.preventDefault();
-            connect(
-                $('server-url').value.trim(),
-                $('username').value.trim(),
-                $('password').value
-            );
+            submitConnection();
         }, false);
+        $('btn-cancel').addEventListener('click', function () {
+            closeSettings();
+        }, false);
+        el.avatar.addEventListener('click', openSettings, false);
 
-        $('back-to-albums').addEventListener('click', function () {
-            show(state.albumReturn);
-        }, false);
+        $('back-to-albums').addEventListener('click', leaveAlbum, false);
 
         $('back-to-artists').addEventListener('click', function () {
             show('screen-artists');
@@ -3088,9 +4661,28 @@
 
         el.npPrev.addEventListener('click', playPrev, false);
         el.npNext.addEventListener('click', playNext, false);
+        el.npFav.addEventListener('click', toggleFavorite, false);
+        el.npQueue.addEventListener('click', function () { toggleQueue(); }, false);
+        $('queue-list').addEventListener('click', function (event) {
+            var node = event.target;
+            while (node && node !== this && (!node.className || node.className.indexOf('queue-row') < 0)) {
+                node = node.parentNode;
+            }
+            if (node && node !== this) {
+                playQueueRow(node);
+            }
+        }, false);
+        el.npShuffle.addEventListener('click', toggleShuffle, false);
+        el.npRepeat.addEventListener('click', cycleRepeat, false);
         el.npPlay.addEventListener('click', togglePlayPause, false);
 
+        if (lite) {
+            setBodyFlag('lite', true);
+        }
+        loadPlayMode();
+        renderPlayMode();
         bindAudio();
+        bindAirPlay();
 
         bindList($('recent-list'), activateCard);
         bindList($('added-list'), activateCard);
@@ -3122,7 +4714,8 @@
             $('server-url').value = saved.url;
             $('username').value = saved.user;
             $('password').value = saved.pass;
-            connect(saved.url, saved.user, saved.pass);
+            $('bridge-url').value = saved.bridge || '';
+            connect(saved.url, saved.user, saved.pass, saved.bridge);
         } else {
             show('screen-connect');
         }
