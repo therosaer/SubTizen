@@ -44,10 +44,9 @@ its box. It carries `padding: 44px 36px 52px` with the matching negative margin 
 `.card` is `overflow: visible`, so the lifted card and its ring are never cut off (that clipping was the flat
 top edge). `ROW_PAD` in `focusNode` mirrors the 36 px side padding.
 
-**Scrolling.** `focusNode` no longer jumps: `animateScroll()` glides a row's `scrollLeft` and the screen's
-`scrollTop` to the target in 280 ms (ease-out), retargeting if a new focus arrives mid-glide and leaving a
-running glide alone when a press needs no scroll. It uses timers, not `requestAnimationFrame` (frames pause
-in a hidden page and can be throttled on a TV), and a safety timer always lands the scroll exactly on target.
+**Scrolling.** `focusNode` scrolls first and focuses second (see "List scrolling" at the end). There is no JS glide: a
+`scrollLeft` animation fought the browser's own focus scrolling on the TV (forward, snap back, forward again), and
+every step repainted a row of cards.
 
 **Navigation animation.** Moving up/down slides the row being entered in from the direction of travel
 (`.grid.row-in-*`, a CSS keyframe replayed from JS by removing the class, forcing a reflow, and re-adding it).
@@ -511,8 +510,6 @@ Animation that is free on a desktop is not on this hardware, so motion is kept t
 - **Cheap only.** Focus is a `transform` transition on one card, a static white ring (no `box-shadow` transition: it repaints every frame),
   and no `will-change` (that put a GPU layer on every card). List rows, keys and tabs have no transitions. The Now Playing cover only
   scales. The lyric glide is one `transform` on one element, which is why it stays smooth.
-- **Scrolling backs off.** `animateScroll()` times its own steps; if three of the first four arrive more than 45 ms late it sets
-  `subtizen.smoothscroll = off`, stops gliding and scrolls instantly from then on (also on later launches). Delete that key to try again.
 - **No redundant DOM writes.** The player bar redraws every second, so it only touches the page when something changed: body and tab
   classes, play/pause SVGs (`state.playIcon`), seeker text and width (`setTextIf` / `setWidthIf`, rounded to 0.2%), lyric line classes,
   and the AirPlay screen (`state.apSig`). Anything that resets those values must go through the same helpers (`resetSeekerDisplay`).
@@ -526,17 +523,19 @@ Animation that is free on a desktop is not on this hardware, so motion is kept t
 - **Covers.** Card art is requested at 300 px (`CARD_ART_SIZE`, was 600: four times the pixels to decode for a 300 px card on a 1080p
   screen) and loaded through a queue of 3 (`pumpArt`) so decoding is spread over frames. Appended cards do not animate in.
 - **Between rows.** The row slide (`animateRow`, opacity + transform on a container holding every card) is gone, the screen's vertical
-  scroll jumps (only a row's horizontal scroll glides) and shadows are small (`0 6px 14px`).
-- **Lite mode.** Evidence of a slow device (the scroll glide arriving late, or two page renders over 150 ms) calls `enableLite()`: it
-  stores `subtizen.lite = on`, adds `body.lite` and turns off the glide, the art fades, entrance animations and the album
-  flight (CSS `body.lite ...` plus checks in `openAlbum`, `leaveAlbum`). To bring the motion back:
-  `localStorage.removeItem('subtizen.lite'); localStorage.removeItem('subtizen.smoothscroll')` and reload.
+  scroll jumps and shadows are small (`0 6px 14px`).
+- **Lite mode.** Evidence of a slow device (two page renders over 150 ms) calls `enableLite()`: it stores `subtizen.lite = on`, adds
+  `body.lite` and turns off the art fades, entrance animations and the album flight (CSS `body.lite ...` plus checks in `openAlbum`,
+  `leaveAlbum`). To bring the motion back: `localStorage.removeItem('subtizen.lite')` and reload.
 
 ### List scrolling
 
-`focusNode` keeps the focused element in view with `revealInScreen()`, which measures where the element actually is (after any scrolling the
-browser did itself) and adjusts only if it is within 20 px of an edge; it runs again on the next tick for engines that scroll after focus. It
-is idempotent, so the list is never pushed one way by the app and pulled back by the browser (that showed as a back-and-forth stutter when
-walking down tracks or artists). Moving between rows in the album, playlist and artist lists goes straight to the neighbouring element
-(`neighbourRow`) instead of scanning every row (an artist list can be hundreds long).
-
+`focusNode` scrolls first and focuses second. A browser scrolls a container on focus only when the element is not already in view, so
+putting it in view beforehand leaves nothing for the browser to do. (When the TV's browser scrolled after our code ran, a list went forward,
+snapped back and went forward again.) The screen is pinned sideways (`scrollLeft = 0`), a row card gets its row scrolled by hand from its
+index (`rowScrollFor`, using `ROW_PAD`), and every element gets `revealInScreen()`, which measures where it is and moves it only if it is
+within 20 px of an edge. The same writes are asserted once more on the next tick, and `wantScroll` / `writeScroll` set a short-lived guard
+that puts a container straight back if a scroll event shows the browser moved it elsewhere (scroll events arrive before paint). Moving
+between rows in the album, playlist and artist lists goes straight to the neighbouring element (`neighbourRow`) instead of scanning every
+row (an artist list can be hundreds long). In a hidden browser pane scroll events are not delivered, so the guard cannot be exercised
+there; the scroll-first order is what the tests cover.

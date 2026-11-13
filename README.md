@@ -37,7 +37,7 @@ Apple Music–style interface with synced lyrics.
 - 📋 **Server playlists** — your Navidrome/Airsonic playlists, fetched live and playable
 - 🎤 **Synced lyrics** — per-line highlighting from LRCLIB, backdrop tinted from album art
 - 🌗 **Dark mode** — remembered across launches
-- ✨ **Smooth motion** — covers fade in, rows rise in, focus and scrolling glide, a card's art flies into the album page and back, and Now Playing's lyrics glide while the cover breathes with play and pause. On a slow TV the app notices and switches the optional motion off by itself ("lite mode")
+- ✨ **Smooth motion** — covers fade in, rows rise in, the focused card grows, a card's art flies into the album page and back, and Now Playing's lyrics glide while the cover breathes with play and pause. On a slow TV the app notices and switches the optional motion off by itself ("lite mode")
 - 🔍 **Search** — on-screen keyboard, since a TV remote has no text input
 - 🔀 **Shuffle and repeat** — on the Now Playing screen; remembered across launches
 - ❤️ **Favorites** — a heart on Now Playing stars the track on your server, and a Favorites row on Home lists them

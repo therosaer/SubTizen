@@ -13,7 +13,7 @@
 - **Scrobbling.** Plays from the TV count on your server (Top Picks, play counts); a track that fails to play is skipped.
 - **Token authentication.** The password no longer travels in URLs (older servers fall back to the plain login automatically).
 - **Connection settings.** The username icon reopens the connect form to change the server or the AirPlay bridge.
-- **Motion.** Covers fade in, rows rise in, focus and row scrolling glide, a card's art flies into the album page and back, and the
+- **Motion.** Covers fade in, rows rise in, the focused card grows, a card's art flies into the album page and back, and the
   Now Playing lyrics glide while the cover shrinks on pause. On a slow TV these switch themselves off ("lite mode").
 - **Player bar.** Slimmer, hidden until something plays or is cast, with messages as a short-lived toast instead of permanent text.
 
@@ -23,7 +23,7 @@
 - Home rows: Down from the tab bar did nothing when Recently Played was empty; empty rows are now hidden.
 - Moving between Home rows put focus on the same column instead of where you were in that row.
 - The Now Playing screen's Back key skipped the tab bar.
-- Walking down long track or artist lists could scroll back and forth.
+- Walking down long track or artist lists, or along a row, could scroll forward, snap back and forward again.
 - A dozen smaller things (lyrics client identity, a dead duplicate comparator, misleading "stalled" message, ...).
 
 ### Changed

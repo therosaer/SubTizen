@@ -2660,32 +2660,12 @@
      * off-screen. Tizen's WebKit does not scroll focused elements into view
      * reliably, so we do it explicitly.
      */
-    /*
-     * Scroll an element's scrollTop/scrollLeft to `to` with an ease-out instead of jumping.
-     * Each call replaces any animation already running on the same element and property,
-     * so holding an arrow key keeps retargeting smoothly. `from` lets the caller say where
-     * the scroll was before the browser's own focus scrolling moved it.
-     */
-    var SCROLL_MS = 280;
-    var SMOOTH_KEY = 'subtizen.smoothscroll';
     var LITE_KEY = 'subtizen.lite';
 
     /*
-     * A glide only helps if frames keep up. On a slow TV each step repaints a whole row of cards
-     * and the glide turns into stutter, so it measures itself: if the first steps arrive late, it
-     * switches itself off (and remembers that) and scrolling is instant again, as before.
-     */
-    var smoothScroll = true;
-    try {
-        smoothScroll = global.localStorage.getItem(SMOOTH_KEY) !== 'off';
-    } catch (e) {
-        smoothScroll = true;
-    }
-
-    /*
-     * Lite mode: when the device shows it cannot keep up, the optional motion goes (glide, background
-     * tint, art fades, entrance and flight animations) and the app behaves like the plain version.
-     * It is switched on by evidence (a stuttering scroll, or two slow list renders) and remembered.
+     * Lite mode: when the device shows it cannot keep up, the optional motion goes (art fades,
+     * entrance and flight animations) and the app behaves like the plain version. It is switched on
+     * by evidence (two slow list renders) and remembered.
      * `localStorage.removeItem('subtizen.lite')` and reload turns the motion back on.
      */
     var lite = false;
@@ -2695,19 +2675,14 @@
     } catch (e2) {
         lite = false;
     }
-    if (lite) {
-        smoothScroll = false;
-    }
 
     function enableLite() {
         if (lite) {
             return;
         }
         lite = true;
-        smoothScroll = false;
         try {
             global.localStorage.setItem(LITE_KEY, 'on');
-            global.localStorage.setItem(SMOOTH_KEY, 'off');
         } catch (e) {
             /* non-fatal */
         }
@@ -2721,89 +2696,54 @@
         }
     }
 
-    function disableSmoothScroll() {
-        markSlow(2);
-    }
     var ROW_PAD = 36;                   /* matches `.grid { padding: ... 36px }` */
 
     /*
-     * Timers, not requestAnimationFrame: frames are paused when the page is hidden and can be
-     * throttled by a TV's browser, which would leave a scroll stuck half-way. ~60 steps a
-     * second is smooth enough for a 280 ms glide.
+     * Scroll guard. Focusing an element makes the browser scroll its container on its own, and on
+     * some TV browsers it does that after our code has already run. We scroll to the final position
+     * BEFORE focusing, so there is normally nothing left for the browser to do; as a safety net we
+     * also state where each container is supposed to be (`wantScroll`), and if a scroll event shows
+     * the browser put it somewhere else it is set straight back. The wish lapses shortly after the
+     * last write, so nothing else is ever held in place.
      */
-    function frameLater(fn) {
-        global.setTimeout(fn, 16);
-    }
+    var GUARD_MS = 300;
 
-    function animateScroll(elm, prop, to, from) {
-        var key = '__anim_' + prop;
-        var start = new Date().getTime();
-        var token;
-
-        if (typeof from !== 'number') {
-            from = elm[prop];
-        }
-        to = Math.round(to);
-        if (!smoothScroll) {
-            elm[prop] = to;
+    function guardScroll(elm, prop) {
+        var flag = '__guard_' + prop;
+        if (elm[flag]) {
             return;
         }
-        if (Math.abs(to - from) < 2) {
-            /*
-             * Nothing to scroll for this focus. If an earlier move is still gliding, leave it
-             * alone (a Left/Right press must not freeze a vertical scroll half-way).
-             */
-            if (!elm[key + '_on']) {
-                elm[prop] = to;
+        elm[flag] = true;
+        elm.addEventListener('scroll', function () {
+            var want = elm['__want_' + prop];
+            if (want !== undefined && elm[prop] !== want) {
+                elm[prop] = want;
             }
-            return;
-        }
-
-        elm[key] = (elm[key] || 0) + 1;
-        token = elm[key];
-        elm[key + '_on'] = true;
-        elm[prop] = from;
-
-        /* Whatever happens to the stepping, the scroll always ends exactly on target. */
-        global.setTimeout(function () {
-            if (elm[key] === token && elm[key + '_on']) {
-                elm[prop] = to;
-                elm[key + '_on'] = false;
-            }
-        }, SCROLL_MS + 90);
-
-        var steps = 0, late = 0, lastAt = start;
-
-        function frame() {
-            var t, eased, now;
-            if (elm[key] !== token) {
-                return;                 /* a newer scroll took over */
-            }
-            now = new Date().getTime();
-            if (steps > 0 && now - lastAt > 45) {
-                late++;
-            }
-            lastAt = now;
-            steps++;
-            if (steps >= 4 && late >= 3) {
-                /* Under ~22 frames a second: give up on gliding on this device. */
-                disableSmoothScroll();
-                elm[prop] = to;
-                elm[key + '_on'] = false;
-                return;
-            }
-            t = Math.min(1, (now - start) / SCROLL_MS);
-            eased = 1 - Math.pow(1 - t, 3);
-            elm[prop] = Math.round(from + (to - from) * eased);
-            if (t < 1) {
-                frameLater(frame);
-            } else {
-                elm[key + '_on'] = false;
-            }
-        }
-        frame();
+        }, false);
     }
 
+    function wantScroll(elm, prop, value) {
+        var key = '__want_' + prop;
+        guardScroll(elm, prop);
+        elm[key] = value;
+        if (elm['__wt_' + prop]) {
+            global.clearTimeout(elm['__wt_' + prop]);
+        }
+        elm['__wt_' + prop] = global.setTimeout(function () {
+            elm[key] = undefined;
+        }, GUARD_MS);
+    }
+
+    /* Write a scroll position and make it the guarded one (the browser may clamp it, so read it back). */
+    function writeScroll(elm, prop, value) {
+        elm[prop] = value;
+        wantScroll(elm, prop, elm[prop]);
+    }
+
+    /*
+     * Keep an element inside the screen with a 20 px margin, judged from where it actually is. Idempotent:
+     * running it twice changes nothing, so it cannot be pushed one way and pulled back.
+     */
     function revealInScreen(node, screen) {
         var r = node.getBoundingClientRect();
         var s = screen.getBoundingClientRect();
@@ -2818,115 +2758,86 @@
         if (delta) {
             screen.scrollTop += delta;
         }
+        wantScroll(screen, 'scrollTop', screen.scrollTop);
+    }
+
+    /*
+     * Where a row has to be scrolled so the card is fully in view, from the card's index and width
+     * (not getBoundingClientRect, which is shifted by the focus scale). Returns the row's current
+     * position when the card is already visible.
+     */
+    function rowScrollFor(node, row) {
+        var cards = gridOf(node);
+        var index = indexIn(cards, node);
+        var cardW = node.offsetWidth;
+        var step = cardW + 26;                       /* matches `.card { margin: 0 26px 0 0 }` */
+        var rowLeft, rowRight, viewLeft, viewRight;
+
+        if (index < 0) {
+            return row.scrollLeft;
+        }
+        rowLeft = ROW_PAD + index * step;            /* the row has ROW_PAD of padding before the first card */
+        rowRight = rowLeft + cardW;
+        viewLeft = row.scrollLeft;
+        viewRight = viewLeft + row.clientWidth;
+        if (rowLeft < viewLeft + 20) {
+            return Math.max(0, rowLeft - ROW_PAD);
+        }
+        if (rowRight > viewRight - 20) {
+            /* Scroll just far enough to reveal the card, not a page. */
+            return rowRight - row.clientWidth + ROW_PAD;
+        }
+        return viewLeft;
     }
 
     function focusNode(node) {
         var screen = node.parentNode;
-        var row, rowScrollBefore;
+        var row = node.parentNode;
+        var isRowCard = !!(row && row.className && row.className.indexOf('grid') >= 0);
+        var rowTarget = 0;
 
         /*
-         * The row is a scroll container, so `focus()` makes the browser scroll
-         * it into view — and the browser centres the card, which overshoots by
-         * a whole page. Remember where the row was so the overshoot can be
-         * undone below.
-         */
-        row = node.parentNode;
-        rowScrollBefore = (row && row.className && row.className.indexOf('grid') >= 0)
-            ? row.scrollLeft : 0;
-
-        /*
-         * Walk up by parentNode, not offsetParent: `.screen` is not positioned,
-         * so it is never an offsetParent, and the chain from a card reaches
-         * `#app` (whose own offsetParent is null) without ever passing through
-         * the screen. Found before focusing so its scroll position can be recorded.
+         * Walk up by parentNode, not offsetParent: `.screen` is not positioned, so it is never an
+         * offsetParent, and the chain from a card reaches `#app` (whose own offsetParent is null)
+         * without ever passing through the screen.
          */
         while (screen && (!screen.className ||
                 screen.className.indexOf('screen') < 0)) {
             screen = screen.parentNode;
         }
+        if (!screen || !screen.className) {
+            node.focus();
+            rememberRowPosition(node);
+            return;
+        }
+
+        /*
+         * Scroll first, focus second. The browser scrolls a container on focus only if the element is
+         * not already in view, so putting it in view beforehand leaves it nothing to do. (When it did
+         * its own scrolling after ours you saw the list jump forward, snap back, then move again.)
+         * The screen is pinned sideways (the browser would drag every row along with the focused one),
+         * a row card gets its row scrolled by hand, and everything gets the vertical reveal.
+         */
+        writeScroll(screen, 'scrollLeft', 0);
+        if (isRowCard) {
+            rowTarget = rowScrollFor(node, row);
+            writeScroll(row, 'scrollLeft', rowTarget);
+        }
+        revealInScreen(node, screen);
+
         node.focus();
         rememberRowPosition(node);
 
-        if (!screen || !screen.className) {
-            return;
-        }
-
-        /*
-         * The browser's focus-reveal scrolls the nearest scrollable ancestor,
-         * which is the screen. That drags every row sideways together, so the
-         * screen is pinned and the row is scrolled by hand instead.
-         */
-        screen.scrollLeft = 0;
-
-        /*
-         * Keep the focused element inside the screen with a 20 px margin, judged from where it
-         * actually is now (after whatever scrolling the browser did itself). That makes the result
-         * the same whichever of us scrolled first, and running it twice changes nothing, so the
-         * list cannot be pushed one way by us and pulled back by the browser. It runs again on the
-         * next tick for engines that do their own focus scrolling after this function returns.
-         */
-        revealInScreen(node, screen);
+        /* For an engine that still scrolls after focus: assert the same positions once more next tick. */
         global.setTimeout(function () {
+            writeScroll(screen, 'scrollLeft', 0);
+            if (isRowCard) {
+                writeScroll(row, 'scrollLeft', rowTarget);
+            }
             revealInScreen(node, screen);
         }, 0);
-
-        /* Scroll only the row the focused card belongs to. */
-        row = node.parentNode;
-        if (!row || !row.className || row.className.indexOf('grid') < 0) {
-            return;
-        }
-        /*
-         * Undo the browser's focus-reveal overshoot, then scroll by hand.
-         *
-         * The browser performs its own scroll-into-view *after* this function
-         * returns (it is not observable through the scrollLeft setter), so the
-         * correction has to be deferred to the next frame or it gets
-         * overwritten.
-         *
-         * The target is derived from the card's index and layout width rather
-         * than from getBoundingClientRect(), because the painted box has
-         * already been shifted by the browser's scroll and is scaled while
-         * focused. Index arithmetic is immune to both.
-         */
-        var cards = gridOf(node);
-        var index = indexIn(cards, node);
-        if (index < 0) {
-            return;
-        }
-        var cardW = node.offsetWidth;
-        /* Matches `.card { margin: 0 26px 0 0 }`. */
-        var gap = 26;
-        var step = cardW + gap;
-        /* The row has ROW_PAD of padding before its first card, so a card sits ROW_PAD further in. */
-        var rowLeft = ROW_PAD + index * step;
-        var rowRight = rowLeft + cardW;
-
-        function applyRowScroll() {
-            /*
-             * Measure against where the row was before focus, not where the
-             * browser's focus-reveal left it. Otherwise a row that the browser
-             * has already scrolled looks "already correct" and is never
-             * brought back to the focused card.
-             */
-            var rowViewLeft = rowScrollBefore;
-            var rowViewRight = rowViewLeft + row.clientWidth;
-            var to;
-
-            if (rowLeft < rowViewLeft + 20) {
-                to = Math.max(0, rowLeft - ROW_PAD);
-            } else if (rowRight > rowViewRight - 20) {
-                /* Scroll just far enough to reveal the card, not a page. */
-                to = rowRight - row.clientWidth + ROW_PAD;
-            } else {
-                to = rowViewLeft;
-            }
-            animateScroll(row, 'scrollLeft', to, rowViewLeft);
-        }
-
-        row.scrollLeft = rowScrollBefore;
-        applyRowScroll();
-        global.setTimeout(applyRowScroll, 0);
     }
+
     /*
      * Replay a CSS animation by removing the class, forcing a reflow, then
      * re-adding it. Without the reflow the browser coalesces the change and
