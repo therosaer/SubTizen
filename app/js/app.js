@@ -143,7 +143,7 @@
 
     function setStatus(message, isError) {
         var cls = 'status' + (isError ? ' error' : '');
-        el.status.innerHTML = message || '';
+        el.status.textContent = message || '';
         if (statusTimer) {
             global.clearTimeout(statusTimer);
             statusTimer = null;
