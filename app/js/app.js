@@ -997,7 +997,7 @@
                 '<li class="track' + enter.cls + '"' + enter.style + ' data-index="' + i + '"' +
                     ' data-id="' + escapeHtml(song.id || '') + '"' +
                     ' data-title="' + escapeHtml(song.title) + '" tabindex="0">' +
-                    '<span class="track-num">' + (song.track || (i + 1)) + '</span>' +
+                    '<span class="track-num">' + escapeHtml(String(song.track || (i + 1))) + '</span>' +
                     '<span class="track-title">' + escapeHtml(song.title) + '</span>' +
                     '<span class="track-dur">' + formatDuration(song.duration) + '</span>' +
                 '</li>'
