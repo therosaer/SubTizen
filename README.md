@@ -32,11 +32,11 @@ Apple Music–style interface with synced lyrics.
 ## Features
 
 - 🎵 **Plays your library** — streams from any Subsonic server, transcoding FLAC/Ogg to MP3
-- 🖼️ **Apple Music–style UI** — lavender gradient, translucent nav pill, artwork card rows
+- 🖼️ **Apple Music–style UI** — neutral palette, translucent nav pill, artwork card rows
 - 🎛️ **Full remote support** — D-pad, media keys, number-pad track jumps
 - 📋 **Server playlists** — your Navidrome/Airsonic playlists, fetched live and playable
 - 🎤 **Synced lyrics** — per-line highlighting from LRCLIB, backdrop tinted from album art
-- 🌗 **Dark mode** — remembered across launches
+- ⚙️ **Settings** — a gear in the nav bar: light or dark appearance, and a checkbox to show or hide the AirPlay tab; both remembered across launches
 - ✨ **Smooth motion** — covers fade in, rows rise in, the focused card grows, a card's art flies into the album page and back, and Now Playing's lyrics glide while the cover breathes with play and pause. On a slow TV the app notices and switches the optional motion off by itself ("lite mode")
 - 🔍 **Search** — on-screen keyboard, since a TV remote has no text input
 - 🔀 **Shuffle and repeat** — on the Now Playing screen; remembered across launches
@@ -55,7 +55,8 @@ Apple Music–style interface with synced lyrics.
 | **Playlists** | Playlists from the server, with owner and song count; Enter opens the track list |
 | **Search** | On-screen keyboard with debounced results, albums first then songs |
 | **Now Playing** | Large art, synced lyrics, seeker, transport buttons, shuffle/repeat, Favorite and Up Next |
-| **AirPlay** | Shows what is being cast to the bridge, with artwork, title and progress; switches here automatically when a cast starts. The username icon in the nav bar reopens the connection settings, including the bridge address |
+| **AirPlay** | Shows what is being cast to the bridge, with artwork, title and progress; switches here automatically when a cast starts, unless the tab is hidden in Settings. The username icon in the nav bar reopens the connection settings, including the bridge address |
+| **Settings** | The gear at the right of the nav bar: Appearance (light or dark) and Show AirPlay tab. Hiding the tab keeps the receiver running, so a cast still plays and shows in the player bar |
 | **Player bar** | Slim and persistent on every screen except Now Playing; appears once something plays or is cast |
 
 ## Project layout
