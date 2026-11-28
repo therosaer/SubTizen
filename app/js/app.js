@@ -42,6 +42,8 @@
         rowMemory: {},              /* last focused card index per home row */
         nowTint: null,              /* tint for the Now Playing screen only */
         casting: false,             /* an AirPlay cast owns the player bar */
+        showAirplay: true,          /* the AirPlay tab is listed in the nav bar */
+        prefsReturn: 'screen-albums',   /* where Back from the settings screen goes */
         barSig: '',
         seekerTimer: null,
         lastGrid: null,
@@ -126,6 +128,9 @@
         } else {
             applyNowTint(null);
         }
+
+        /* The gear stays lit while the settings screen is up. */
+        $('btn-gear').className = 'tab gear' + (screenId === 'screen-settings' ? ' open' : '');
 
         /* The nav pill only makes sense once a server is connected. */
         el.nav.className = (screenId === 'screen-connect' && !state.client) ? 'hidden' : '';
@@ -1806,6 +1811,41 @@
         }
     }
 
+    /*
+     * A cover from another origin taints the canvas, so on browsers that enforce it
+     * tintFromImage() gives up and the screen would stay on the grey fallback. The API
+     * already works cross-origin over XHR, so fetch the cover bytes that way, wrap them
+     * in a same-origin blob URL and sample that instead.
+     */
+    function tintViaBlob(url, seq) {
+        var xhr, blobUrl, img;
+
+        if (!global.URL || !global.URL.createObjectURL || !global.Blob) {
+            return;
+        }
+        xhr = new XMLHttpRequest();
+        xhr.open('GET', url, true);
+        xhr.responseType = 'blob';
+        xhr.onload = function () {
+            if (seq !== npTintSeq || xhr.status !== 200 || !xhr.response) {
+                return;
+            }
+            blobUrl = global.URL.createObjectURL(xhr.response);
+            img = new Image();
+            img.onload = function () {
+                global.URL.revokeObjectURL(blobUrl);
+                if (seq === npTintSeq) {
+                    setNowTint(tintFromImage(img));
+                }
+            };
+            img.onerror = function () {
+                global.URL.revokeObjectURL(blobUrl);
+            };
+            img.src = blobUrl;
+        };
+        xhr.send();
+    }
+
     function tintNowPlaying(song) {
         var seq = ++npTintSeq;
         var img;
@@ -1816,10 +1856,16 @@
         }
         img = new Image();
         img.onload = function () {
+            var tint;
             if (seq !== npTintSeq) {
                 return;
             }
-            setNowTint(tintFromImage(img));
+            tint = tintFromImage(img);
+            if (tint) {
+                setNowTint(tint);
+            } else {
+                tintViaBlob(img.src, seq);
+            }
         };
         img.onerror = function () {
             if (seq === npTintSeq) {
@@ -2770,7 +2816,7 @@
         var cards = gridOf(node);
         var index = indexIn(cards, node);
         var cardW = node.offsetWidth;
-        var step = cardW + 26;                       /* matches `.card { margin: 0 26px 0 0 }` */
+        var step = cardW + 24;                       /* matches `.card { margin: 0 24px 0 0 }` */
         var rowLeft, rowRight, viewLeft, viewRight;
 
         if (index < 0) {
@@ -3037,7 +3083,7 @@
     }
 
     /* The nav bar buttons, in visual order, for the Up handoff. */
-    /* Tabs, the avatar and the theme button are all `.tab` buttons inside #nav. */
+    /* Tabs, the avatar and the gear are all `.tab` buttons inside #nav. */
     function isNavControl(node) {
         return !!(node && node.className && /(^|\s)tab(\s|$)/.test(node.className) &&
             node.parentNode && (node.parentNode.id === 'nav' ||
@@ -3468,7 +3514,7 @@
         document.addEventListener('keydown', function (event) {
             var key = event.keyCode;
             var target = document.activeElement;
-            var cards, next, rowsQ, idxQ;
+            var cards, next, rowsQ, idxQ, rows;
 
             /*
              * A list handler already acted on this keypress. Activating a card
@@ -3532,6 +3578,38 @@
                     } else {
                         show('screen-albums');
                     }
+                }
+                return;
+            }
+
+            /*
+             * The settings screen is two rows: Up/Down walk them (Up from the first goes to
+             * the nav bar), Enter flips the focused one, and Back returns to the previous screen.
+             */
+            if ($('screen-settings').className.indexOf('active') >= 0) {
+                rows = prefRows();
+                idxQ = indexIn(rows, target);
+                if (key === 38 || key === 40) {
+                    event.preventDefault();
+                    if (idxQ < 0) {
+                        if (key === 40) {
+                            focusNode(rows[0]);
+                        }
+                    } else if (key === 40) {
+                        focusNode(rows[Math.min(idxQ + 1, rows.length - 1)]);
+                    } else if (idxQ === 0) {
+                        focusNav();
+                    } else {
+                        focusNode(rows[idxQ - 1]);
+                    }
+                } else if (key === 13 || key === 29443) {
+                    if (idxQ >= 0) {
+                        event.preventDefault();
+                        target.click();
+                    }
+                } else if (key === 10009 || key === 461) {
+                    event.preventDefault();
+                    closePrefs();
                 }
                 return;
             }
@@ -4228,10 +4306,14 @@
             saveConnection({ url: url, user: user, pass: pass, bridge: bridge, auth: saved.auth });
             AirPlay.configure(bridge, url);
             AirPlay.start();
-            closeSettings('screen-airplay');
-            selectTab('airplay');
-            renderAirPlay();
-            AirPlay.poll();
+            if (state.showAirplay) {
+                closeSettings('screen-airplay');
+                selectTab('airplay');
+                renderAirPlay();
+                AirPlay.poll();
+            } else {
+                closeSettings();
+            }
             setStatus('AirPlay bridge saved.', false);
             return;
         }
@@ -4365,9 +4447,12 @@
         AirPlay.on('begin', function (snap) {
             /* Casting is a deliberate act, so it takes over from the queue. */
             el.audio.pause();
-            selectTab('airplay');
             renderAirPlay();
-            show('screen-airplay');
+            /* With the tab hidden a cast plays on without pulling the user off their screen. */
+            if (state.showAirplay) {
+                selectTab('airplay');
+                show('screen-airplay');
+            }
             setStatus('AirPlay' + (snap.status && snap.status.client ?
                 ' from ' + snap.status.client : '') + '.', false);
         });
@@ -4393,11 +4478,13 @@
         var i;
         for (i = 0; i < tabs.length; i++) {
             if (!tabs[i].getAttribute('data-tab')) {
-                continue;   /* the theme toggle is not a tab */
+                continue;   /* the avatar and the gear are not tabs */
             }
             tabs[i].className = 'tab' +
                 (tabs[i].getAttribute('data-tab') === tab ? ' active' : '') +
-                (tabs[i].getAttribute('data-tab') === 'airplay' && state.casting ? ' casting' : '');
+                (tabs[i].getAttribute('data-tab') === 'airplay' && state.casting ? ' casting' : '') +
+                /* this rewrites the whole class list, so the AirPlay setting must be re-applied here */
+                (tabs[i].getAttribute('data-tab') === 'airplay' && !state.showAirplay ? ' hidden' : '');
         }
     }
 
@@ -4457,39 +4544,96 @@
         }
     }
 
-    /* ---------- Theme ---------- */
+    /* ---------- Preferences (the gear) ---------- */
 
     var THEME_KEY = 'subtizen.theme';
+    var AIRPLAY_TAB_KEY = 'subtizen.airplayTab';
+
+    function readPref(key) {
+        try {
+            return global.localStorage.getItem(key);
+        } catch (e) {
+            return null;                /* localStorage may be unavailable; use the default */
+        }
+    }
+
+    function writePref(key, value) {
+        try {
+            global.localStorage.setItem(key, value);
+        } catch (e) {
+            /* localStorage may be unavailable; non-fatal */
+        }
+    }
+
+    function isDark() {
+        return document.body.className.indexOf('dark') >= 0;
+    }
+
+    /* The two rows on the settings screen always say what is currently in force. */
+    function renderPrefs() {
+        $('pref-theme-value').innerHTML = isDark() ? 'Dark' : 'Light';
+        $('pref-airplay').setAttribute('aria-checked', state.showAirplay ? 'true' : 'false');
+        $('pref-airplay-check').className = 'pref-check' + (state.showAirplay ? ' on' : '');
+    }
 
     function applyTheme(dark) {
         /*
          * `now-active` is owned by `show()`; only the `dark` flag is rewritten
          * here so switching theme does not drop the Now Playing layout.
          */
-        document.body.className = document.body.className
-            .replace(/\s*dark/, '') +
-            (dark ? ' dark' : '');
-        el.themeBtn.innerHTML = dark ? 'Light' : 'Dark';
-        try {
-            global.localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light');
-        } catch (e) {
-            /* localStorage may be unavailable; non-fatal */
-        }
+        setBodyFlag('dark', dark);
+        writePref(THEME_KEY, dark ? 'dark' : 'light');
+        renderPrefs();
     }
 
-    function loadTheme() {
-        var saved = null;
-        try {
-            saved = global.localStorage.getItem(THEME_KEY);
-        } catch (e) {
-            saved = null;
-        }
-        applyTheme(saved === 'dark');
+    function applyAirplayTab(on) {
+        state.showAirplay = on;
+        $('tab-airplay').className = ($('tab-airplay').className
+            .replace(/\s*hidden/, '')) + (on ? '' : ' hidden');
+        writePref(AIRPLAY_TAB_KEY, on ? 'on' : 'off');
+        renderPrefs();
     }
 
-    function bindTheme() {
-        el.themeBtn.addEventListener('click', function () {
-            applyTheme(document.body.className.indexOf('dark') < 0);
+    function loadPrefs() {
+        applyTheme(readPref(THEME_KEY) === 'dark');
+        applyAirplayTab(readPref(AIRPLAY_TAB_KEY) !== 'off');
+    }
+
+    function openPrefs() {
+        var from = activeScreenId();
+        if (from === 'screen-settings') {
+            closePrefs();
+            return;
+        }
+        if (from === 'screen-connect' && !state.client) {
+            return;
+        }
+        state.prefsReturn = from;
+        renderPrefs();
+        show('screen-settings');
+    }
+
+    function closePrefs() {
+        var back = state.prefsReturn;
+        if (back === 'screen-airplay' && !state.showAirplay) {
+            /* The tab was switched off from in here, so there is nothing to go back to. */
+            back = 'screen-albums';
+            selectTab('albums');
+        }
+        show(back);
+    }
+
+    function prefRows() {
+        return [$('pref-theme'), $('pref-airplay')];
+    }
+
+    function bindPrefs() {
+        $('btn-gear').addEventListener('click', openPrefs, false);
+        $('pref-theme').addEventListener('click', function () {
+            applyTheme(!isDark());
+        }, false);
+        $('pref-airplay').addEventListener('click', function () {
+            applyAirplayTab(!state.showAirplay);
         }, false);
     }
 
@@ -4504,7 +4648,6 @@
         el.nowPlaying = $('now-playing');
         el.npArt = $('np-art');
         el.audio = $('audio');
-        el.themeBtn = $('btn-theme');
         el.playBtn = $('btn-play');
         el.seekFill = $('seek-fill');
         el.seekElapsed = $('seek-elapsed');
@@ -4612,13 +4755,13 @@
         });
         bindArtistIndex();
         bindTabs();
-        bindTheme();
+        bindPrefs();
         bindRemote();
         bindMediaKeys();
         bindNumberKeys();
         RemoteKeys.registerWhenReady();
         RemoteKeys.bindLifecycle();
-        loadTheme();
+        loadPrefs();
 
         var saved = loadConnection();
         if (saved && saved.url && saved.user && saved.pass) {

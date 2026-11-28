@@ -21,7 +21,14 @@
         <button class="tab" id="tab-now" data-tab="now">Now Playing</button>
         <button class="tab" id="tab-airplay" data-tab="airplay">AirPlay</button>
     </div>
-    <button class="tab theme-toggle" id="btn-theme" title="Toggle dark mode">Dark</button>
+    <button class="tab gear" id="btn-gear" aria-label="Settings" title="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3.5"/>
+            <circle cx="12" cy="12" r="7"/>
+            <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
+            <path d="M12 2v3M12 19v3M2 12h3M19 12h3" transform="rotate(45 12 12)"/>
+        </svg>
+    </button>
 </nav>
 
 <div id="app">
@@ -156,6 +163,22 @@
                     </button>
                 </div>
             </div>
+        </div>
+    </section>
+
+    <!-- App preferences, opened from the gear in the nav bar -->
+    <section id="screen-settings" class="screen">
+        <div class="panel">
+            <h1>Settings</h1>
+            <button class="pref" id="pref-theme">
+                <span class="pref-name">Appearance</span>
+                <span class="pref-value" id="pref-theme-value">Light</span>
+            </button>
+            <button class="pref" id="pref-airplay" role="checkbox" aria-checked="true">
+                <span class="pref-name">Show AirPlay tab</span>
+                <span class="pref-check" id="pref-airplay-check"></span>
+            </button>
+            <p class="hint">Hiding the AirPlay tab keeps the receiver running; casts still play and show in the player bar.</p>
         </div>
     </section>
 

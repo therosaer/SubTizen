@@ -81,7 +81,7 @@ tools/package.sh     builds dist/SubTizen.wgt
 Tizen requires the package id to be **exactly 10 alphanumeric characters**, so
 `config.xml` uses `SubTizen01` as `tizen:application/@package` and
 `SubTizen01.SubTizen` as the application id. The widget `version` is bumped for each
-release; the current release is `1.1`.
+release; the current release is `1.2`.
 
 ## Build
 

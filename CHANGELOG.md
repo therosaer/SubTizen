@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2
+
+### Added
+- **Settings.** A gear at the right of the nav bar replaces the Dark button and opens a Settings screen with two options:
+  **Appearance** (light or dark) and **Show AirPlay tab**. Both are remembered across launches. With the tab hidden the AirPlay
+  receiver keeps running, so a cast still plays and shows in the player bar, but it no longer takes you to the AirPlay screen.
+
+### Changed
+- **A quieter look.** The lavender and purple backgrounds give way to a neutral warm-grey (light) and graphite (dark) palette, with
+  one blue accent. Coloured glows, uppercase labels and the heaviest font weights are gone, spacing sits on a 4px grid, and the
+  focus and entrance motion share one easing curve. On Now Playing the colour now comes from the cover alone.
+- Track and search rows use the full row width, so durations and result types line up at the right edge.
+
+### Fixed
+- **Cover tint on Now Playing** is applied in browsers that block reading a cover from another origin, not only on the TV.
+
 ## 1.1
 
 ### Added
